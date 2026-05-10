@@ -380,3 +380,37 @@ html, body, #root { height: 100dvh; height: 100vh; }
 [data-theme="notion"] .glow-green,
 [data-theme="notion"] .glow-red,
 [data-theme="notion"] .glow-amber { text-shadow: none !important; }
+
+/* ── StatusDot: softer ring + subtle shadow on light backgrounds ─── */
+[data-theme="notion"] [class*="ring-green-500"] { --tw-ring-color: rgba(5,150,105,0.25) !important; }
+[data-theme="notion"] [class*="ring-red-500"]   { --tw-ring-color: rgba(225,29,72,0.25) !important; }
+
+/* ── Modal overlays: hull-950/80 needs lighter scrim in light mode ── */
+[data-theme="notion"] [class*="bg-hull-950/80"]  { background-color: rgba(248,250,252,0.85) !important; }
+[data-theme="notion"] [class*="bg-hull-950/"] { background-color: rgba(248,250,252,0.92) !important; }
+
+/* ── Form inputs: ensure readable on light surfaces ─────────────── */
+[data-theme="notion"] input[class*="bg-hull-800"],
+[data-theme="notion"] textarea[class*="bg-hull-800"],
+[data-theme="notion"] select[class*="bg-hull-800"] {
+  background-color: #f8fafc !important;  /* slate-50 — light input bg */
+  border-color: #cbd5e1 !important;      /* slate-300 */
+  color: #18181b !important;             /* zinc-900 */
+}
+[data-theme="notion"] input[class*="bg-hull-800"]:focus,
+[data-theme="notion"] textarea[class*="bg-hull-800"]:focus,
+[data-theme="notion"] select[class*="bg-hull-800"]:focus {
+  border-color: rgba(37,99,235,0.5) !important;
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.12) !important;
+}
+[data-theme="notion"] input::placeholder,
+[data-theme="notion"] textarea::placeholder {
+  color: #94a3b8 !important;  /* slate-400 */
+}
+
+/* ── Toast notifications: consistent light-theme styling ─────────── */
+[data-theme="notion"] .glass {
+  background: rgba(255,255,255,0.92) !important;
+  border-color: rgba(0,0,0,0.08) !important;
+  color: #18181b !important;
+}

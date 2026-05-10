@@ -105,8 +105,8 @@ func jitDeny(id, approver, ip string) error {
 	return nil
 }
 
-const jitMaxRequests  = 500
-const jitPendingTTL   = 48 * time.Hour
+const jitMaxRequests = 500
+const jitPendingTTL = 48 * time.Hour
 
 // ─── ConfigMap Persistence ───────────────────────────────────────────
 
@@ -319,7 +319,7 @@ func resolvePodOwner(ns, podName string) (string, string) {
 	if cache.pods == nil {
 		return "Pod", podName
 	}
-	for _, p := range cache.pods.Items {
+	for _, p := range cache.pods {
 		if p.Namespace != ns || p.Name != podName {
 			continue
 		}
@@ -329,7 +329,7 @@ func resolvePodOwner(ns, podName string) (string, string) {
 		ownerKind := p.OwnerReferences[0].Kind
 		ownerName := p.OwnerReferences[0].Name
 		if ownerKind == "ReplicaSet" && cache.replicasets != nil {
-			for _, rs := range cache.replicasets.Items {
+			for _, rs := range cache.replicasets {
 				if rs.Name == ownerName && rs.Namespace == ns && len(rs.OwnerReferences) > 0 {
 					ownerKind = rs.OwnerReferences[0].Kind
 					ownerName = rs.OwnerReferences[0].Name
@@ -350,24 +350,30 @@ func jitExpiryLoop() {
 
 		now := time.Now()
 		changed := false
+		var expired []jitRequest
 		jitStore.mu.Lock()
 		for i := range jitStore.requests {
 			r := &jitStore.requests[i]
 			if r.Status == "active" && r.ExpiresAt != nil && now.After(*r.ExpiresAt) {
 				r.Status = "expired"
 				changed = true
+				expired = append(expired, *r)
 				slog.Info("jit: request expired", "id", r.ID, "email", r.Email, "namespace", r.Namespace)
 				auditRecord(r.Email, "viewer", "jit.expired", jitResourceStr(r), "auto-expired", "")
 			}
 			if r.Status == "pending" && now.Sub(r.CreatedAt) > jitPendingTTL {
 				r.Status = "expired"
 				changed = true
+				expired = append(expired, *r)
 				slog.Info("jit: pending request timed out", "id", r.ID, "email", r.Email, "namespace", r.Namespace)
 				auditRecord(r.Email, "viewer", "jit.expired", jitResourceStr(r), "pending request timed out", "")
 			}
 		}
 		jitStore.mu.Unlock()
 
+		for i := range expired {
+			webhookNotifyJIT("jit.expired", &expired[i], "")
+		}
 		if changed {
 			jitPersist()
 		}
@@ -455,6 +461,7 @@ func apiJITCreate(w http.ResponseWriter, r *http.Request) {
 	auditRecord(email, role, "jit.request", resource, "duration: "+body.Duration+", reason: "+body.Reason, clientIP(r))
 	slog.Info("jit: new request", "id", req.ID, "email", email, "namespace", body.Namespace, "pod", body.Pod)
 	slackNotifyJIT(req)
+	webhookNotifyJIT("jit.requested", &req, email)
 
 	j(w, req)
 }
@@ -535,7 +542,9 @@ func apiJITAction(w http.ResponseWriter, r *http.Request) {
 	case "approve":
 		if err := jitApprove(id, adminEmail, clientIP(r)); err != nil {
 			code := 400
-			if err == errJITNotFound { code = 404 }
+			if err == errJITNotFound {
+				code = 404
+			}
 			je(w, err.Error(), code)
 			return
 		}
@@ -544,12 +553,15 @@ func apiJITAction(w http.ResponseWriter, r *http.Request) {
 		jitStore.mu.Unlock()
 		if req != nil {
 			slackNotifyJITResult(req, "approve", adminEmail)
+			webhookNotifyJIT("jit.approved", req, adminEmail)
 		}
 
 	case "deny":
 		if err := jitDeny(id, adminEmail, clientIP(r)); err != nil {
 			code := 400
-			if err == errJITNotFound { code = 404 }
+			if err == errJITNotFound {
+				code = 404
+			}
 			je(w, err.Error(), code)
 			return
 		}
@@ -558,6 +570,7 @@ func apiJITAction(w http.ResponseWriter, r *http.Request) {
 		jitStore.mu.Unlock()
 		if req != nil {
 			slackNotifyJITResult(req, "deny", adminEmail)
+			webhookNotifyJIT("jit.denied", req, adminEmail)
 		}
 
 	case "revoke":
@@ -579,6 +592,7 @@ func apiJITAction(w http.ResponseWriter, r *http.Request) {
 		slog.Info("jit: request revoked", "id", id, "revoked_by", adminEmail)
 		go jitPersist()
 		slackNotifyJITResult(req, "revoke", adminEmail)
+		webhookNotifyJIT("jit.revoked", req, adminEmail)
 	}
 
 	j(w, map[string]string{"status": "ok"})

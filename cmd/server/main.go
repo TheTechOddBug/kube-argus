@@ -129,6 +129,7 @@ func main() {
 	go jitExpiryLoop()
 
 	initSlack()
+	initWebhook()
 
 	auditInitPersistence()
 	auditRestore()
@@ -185,7 +186,9 @@ func main() {
 	mux.HandleFunc("/api/jit/", apiJITAction)
 	mux.HandleFunc("/api/slack/interact", apiSlackInteract)
 	mux.HandleFunc("/api/settings/slack", apiSlackSettings)
+	mux.HandleFunc("/api/settings/webhook", apiWebhookSettings)
 	mux.HandleFunc("/api/audit", apiAudit)
+	mux.HandleFunc("/api/ws/presence", apiPresenceWS)
 	mux.HandleFunc("/api/online-users", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return

@@ -43,8 +43,16 @@ function timeRemaining(expiresAt: string): string {
   return `${Math.floor(diff / 3600000)}h ${Math.floor((diff % 3600000) / 60000)}m`
 }
 
+function parseDurationMs(d: string): number {
+  const m = d.match(/^(\d+)([smhd])$/)
+  if (!m) return 0
+  const n = parseInt(m[1], 10)
+  const unit = m[2]
+  return n * (unit === 's' ? 1_000 : unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000)
+}
+
 export function JITRequestsModal({ onClose }: { onClose: () => void }) {
-  const { role } = useAuth()
+  const { email, role } = useAuth()
   const isAdmin = role === 'admin'
   const [requests, setRequests] = useState<JITRequest[]>([])
   const [filter, setFilter] = useState<string>('all')
@@ -62,11 +70,28 @@ export function JITRequestsModal({ onClose }: { onClose: () => void }) {
 
   const doAction = async (id: string, action: string) => {
     setActionLoading(`${id}-${action}`)
+    const newStatus = action === 'approve' ? 'active' : action === 'deny' ? 'denied' : 'revoked'
+    let snapshot: JITRequest[] = []
+    setRequests(rs => {
+      snapshot = rs
+      return rs.map(req => {
+        if (req.id !== id) return req
+        const updated: JITRequest = { ...req, status: newStatus, approvedBy: email }
+        if (action === 'approve') {
+          const ms = parseDurationMs(req.duration)
+          if (ms > 0) updated.expiresAt = new Date(Date.now() + ms).toISOString()
+        }
+        return updated
+      })
+    })
     try {
       const r = await fetch(`/api/jit/${id}/${action}`, { method: 'POST' })
       if (!r.ok) throw new Error(await r.text())
       fetchRequests()
-    } catch { /* ignore */ }
+    } catch (e) {
+      setRequests(snapshot)
+      console.error(`JIT ${action} failed:`, e)
+    }
     setActionLoading(null)
   }
 

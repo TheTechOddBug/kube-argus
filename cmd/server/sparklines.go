@@ -31,10 +31,14 @@ func (sb *sparklineBuffer) record(podMetricsMap map[string][2]int64) {
 		ring[sb.idx] = usage
 	}
 	for key := range sb.points {
-		if !seen[key] { delete(sb.points, key) }
+		if !seen[key] {
+			delete(sb.points, key)
+		}
 	}
 	sb.idx = (sb.idx + 1) % sparklineMaxPoints
-	if sb.count < sparklineMaxPoints { sb.count++ }
+	if sb.count < sparklineMaxPoints {
+		sb.count++
+	}
 }
 
 func (sb *sparklineBuffer) snapshot() map[string][][2]int64 {
@@ -64,7 +68,9 @@ func apiPodSparklines(w http.ResponseWriter, r *http.Request) {
 	for key, pts := range snap {
 		if ns != "" {
 			slashIdx := strings.Index(key, "/")
-			if slashIdx < 0 || key[:slashIdx] != ns { continue }
+			if slashIdx < 0 || key[:slashIdx] != ns {
+				continue
+			}
 		}
 		cpuArr := make([][2]int64, len(pts))
 		memArr := make([][2]int64, len(pts))

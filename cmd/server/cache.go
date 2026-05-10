@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -17,10 +16,23 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+
+	"k8s.io/client-go/informers"
+	kcache "k8s.io/client-go/tools/cache"
 )
 
 // ─── Background Cache ────────────────────────────────────────────────
+//
+// Uses Kubernetes SharedInformerFactory (List+Watch) instead of periodic
+// full re-lists.  The informer maintains an in-memory store for each
+// resource type via a persistent watch stream.  rebuildFromInformers()
+// copies the current state from those stores into the typed list fields
+// that API handlers already read — zero API server calls.
+//
+// Metrics-server doesn't support watch, so node/pod metrics are polled
+// separately on a 10-second timer.
 
 // rsOwner holds the resolved owner of a ReplicaSet (typically a Deployment).
 type rsOwner struct {
@@ -29,9 +41,14 @@ type rsOwner struct {
 }
 
 type clusterCache struct {
-	mu             sync.RWMutex
+	mu sync.RWMutex
+	// Hot, high-cardinality types stored as pointer slices to avoid the
+	// per-rebuild value-copy cost (millions of struct copies on big clusters).
+	pods        []*corev1.Pod
+	events      []*corev1.Event
+	replicasets []*appsv1.ReplicaSet
+
 	nodes          *corev1.NodeList
-	pods           *corev1.PodList
 	deployments    *appsv1.DeploymentList
 	statefulsets   *appsv1.StatefulSetList
 	daemonsets     *appsv1.DaemonSetList
@@ -39,7 +56,6 @@ type clusterCache struct {
 	jobs           *batchv1.JobList
 	cronjobs       *batchv1.CronJobList
 	namespaces     *corev1.NamespaceList
-	events         *corev1.EventList
 	ingresses      *netv1.IngressList
 	hpas           *autov2.HorizontalPodAutoscalerList
 	configMeta     []configMeta
@@ -47,16 +63,15 @@ type clusterCache struct {
 	nodeMetrics    *metricsapi.NodeMetricsList
 	podMetrics     *metricsapi.PodMetricsList
 	pdbs           *policyv1.PodDisruptionBudgetList
-	replicasets    *appsv1.ReplicaSetList
 	pvcs           *corev1.PersistentVolumeClaimList
 	pvs            *corev1.PersistentVolumeList
 	storageClasses *storagev1.StorageClassList
 	configDrift    []interface{}
 	lastRefresh    time.Time
 
-	// Pre-computed lookup maps (rebuilt each refresh cycle).
-	podMetricsMap map[string][2]int64          // "ns/name" → [cpuMillis, memMiB]
-	rsOwners      map[string]rsOwner           // "ns/rsName" → resolved owner
+	// Pre-computed lookup maps (rebuilt each cycle).
+	podMetricsMap map[string][2]int64 // "ns/name" → [cpuMillis, memMiB]
+	rsOwners      map[string]rsOwner  // "ns/rsName" → resolved owner
 }
 
 type configMeta struct {
@@ -69,91 +84,250 @@ type configMeta struct {
 	Version      string
 }
 
-var cache = &clusterCache{}
+var (
+	cache             = &clusterCache{}
+	informerFactory   informers.SharedInformerFactory
+	informerRebuildCh = make(chan struct{}, 1)
+)
 
-func (c *clusterCache) refresh() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+// triggerRebuild sends a non-blocking signal to rebuild the cache from
+// informer stores.  Multiple rapid calls coalesce into a single rebuild.
+func triggerRebuild() {
+	select {
+	case informerRebuildCh <- struct{}{}:
+	default: // rebuild already pending
+	}
+}
 
-	var nodes *corev1.NodeList
-	var pods *corev1.PodList
-	var deps *appsv1.DeploymentList
-	var sts *appsv1.StatefulSetList
-	var ds *appsv1.DaemonSetList
-	var svcs *corev1.ServiceList
-	var jobs *batchv1.JobList
-	var cjobs *batchv1.CronJobList
-	var nsList *corev1.NamespaceList
-	var events *corev1.EventList
-	var ings *netv1.IngressList
-	var hpas *autov2.HorizontalPodAutoscalerList
-	var cmMeta []configMeta
-	var secMeta []configMeta
-	var nodeMetrics *metricsapi.NodeMetricsList
-	var podMetrics *metricsapi.PodMetricsList
-	var pdbs *policyv1.PodDisruptionBudgetList
-	var rsList *appsv1.ReplicaSetList
-	var pvcList *corev1.PersistentVolumeClaimList
-	var pvList *corev1.PersistentVolumeList
-	var scList *storagev1.StorageClassList
+// ─── Rebuild from Informer Stores ────────────────────────────────────
+//
+// Reads current state from in-memory informer stores (zero API calls)
+// and copies it into the clusterCache fields that handlers consume.
 
-	storeBatch := func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if nodes != nil { c.nodes = nodes }
-		if pods != nil { c.pods = pods }
-		if deps != nil { c.deployments = deps }
-		if sts != nil { c.statefulsets = sts }
-		if ds != nil { c.daemonsets = ds }
-		if svcs != nil { c.services = svcs }
-		if jobs != nil { c.jobs = jobs }
-		if cjobs != nil { c.cronjobs = cjobs }
-		if nsList != nil { c.namespaces = nsList }
-		if events != nil { c.events = events }
-		if ings != nil { c.ingresses = ings }
-		if hpas != nil { c.hpas = hpas }
-		if cmMeta != nil { c.configMeta = cmMeta }
-		if secMeta != nil { c.secretMeta = secMeta }
-		if nodeMetrics != nil { c.nodeMetrics = nodeMetrics }
-		if podMetrics != nil { c.podMetrics = podMetrics }
-		if pdbs != nil { c.pdbs = pdbs }
-		if rsList != nil { c.replicasets = rsList }
-		if pvcList != nil { c.pvcs = pvcList }
-		if pvList != nil { c.pvs = pvList }
-		if scList != nil { c.storageClasses = scList }
-		c.lastRefresh = time.Now()
+func (c *clusterCache) rebuildFromInformers() {
+	// Read from informer stores — all in-memory, no network I/O
+	nodePtrs, _ := informerFactory.Core().V1().Nodes().Lister().List(labels.Everything())
+	podPtrs, _ := informerFactory.Core().V1().Pods().Lister().List(labels.Everything())
+	depPtrs, _ := informerFactory.Apps().V1().Deployments().Lister().List(labels.Everything())
+	stsPtrs, _ := informerFactory.Apps().V1().StatefulSets().Lister().List(labels.Everything())
+	dsPtrs, _ := informerFactory.Apps().V1().DaemonSets().Lister().List(labels.Everything())
+	svcPtrs, _ := informerFactory.Core().V1().Services().Lister().List(labels.Everything())
+	jobPtrs, _ := informerFactory.Batch().V1().Jobs().Lister().List(labels.Everything())
+	cjPtrs, _ := informerFactory.Batch().V1().CronJobs().Lister().List(labels.Everything())
+	nsPtrs, _ := informerFactory.Core().V1().Namespaces().Lister().List(labels.Everything())
+	eventPtrs, _ := informerFactory.Core().V1().Events().Lister().List(labels.Everything())
+	ingPtrs, _ := informerFactory.Networking().V1().Ingresses().Lister().List(labels.Everything())
+	hpaPtrs, _ := informerFactory.Autoscaling().V2().HorizontalPodAutoscalers().Lister().List(labels.Everything())
+	pdbPtrs, _ := informerFactory.Policy().V1().PodDisruptionBudgets().Lister().List(labels.Everything())
+	rsPtrs, _ := informerFactory.Apps().V1().ReplicaSets().Lister().List(labels.Everything())
+	pvcPtrs, _ := informerFactory.Core().V1().PersistentVolumeClaims().Lister().List(labels.Everything())
+	pvPtrs, _ := informerFactory.Core().V1().PersistentVolumes().Lister().List(labels.Everything())
+	scPtrs, _ := informerFactory.Storage().V1().StorageClasses().Lister().List(labels.Everything())
+	cmPtrs, _ := informerFactory.Core().V1().ConfigMaps().Lister().List(labels.Everything())
+	secPtrs, _ := informerFactory.Core().V1().Secrets().Lister().List(labels.Everything())
+
+	// Convert pointer slices to typed lists (handlers expect *TypeList)
+	nodes := &corev1.NodeList{Items: make([]corev1.Node, len(nodePtrs))}
+	for i, p := range nodePtrs {
+		nodes.Items[i] = *p
 	}
 
-	// Batch 1: critical path — nodes, pods, metrics, namespaces (overview needs these)
-	var wg1 sync.WaitGroup
-	wg1.Add(5)
-	go func() { defer wg1.Done(); nodes, _ = clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg1.Done(); pods, _ = clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg1.Done(); nsList, _ = clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}) }()
-	go func() {
-		defer wg1.Done()
-		if metricsCl != nil {
-			var err error
-			nodeMetrics, err = metricsCl.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
-			if err != nil {
-				slog.Warn("metrics-server node metrics failed", "error", err)
-			}
-		}
-	}()
-	go func() {
-		defer wg1.Done()
-		if metricsCl != nil {
-			var err error
-			podMetrics, err = metricsCl.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{})
-			if err != nil {
-				slog.Warn("metrics-server pod metrics failed", "error", err)
-			}
-		}
-	}()
-	wg1.Wait()
-	storeBatch()
+	deps := &appsv1.DeploymentList{Items: make([]appsv1.Deployment, len(depPtrs))}
+	for i, p := range depPtrs {
+		deps.Items[i] = *p
+	}
 
-	// Pre-build podMetricsMap — used by /api/pods, /api/workloads, /api/nodes.
+	sts := &appsv1.StatefulSetList{Items: make([]appsv1.StatefulSet, len(stsPtrs))}
+	for i, p := range stsPtrs {
+		sts.Items[i] = *p
+	}
+
+	ds := &appsv1.DaemonSetList{Items: make([]appsv1.DaemonSet, len(dsPtrs))}
+	for i, p := range dsPtrs {
+		ds.Items[i] = *p
+	}
+
+	svcs := &corev1.ServiceList{Items: make([]corev1.Service, len(svcPtrs))}
+	for i, p := range svcPtrs {
+		svcs.Items[i] = *p
+	}
+
+	jobs := &batchv1.JobList{Items: make([]batchv1.Job, len(jobPtrs))}
+	for i, p := range jobPtrs {
+		jobs.Items[i] = *p
+	}
+
+	cjobs := &batchv1.CronJobList{Items: make([]batchv1.CronJob, len(cjPtrs))}
+	for i, p := range cjPtrs {
+		cjobs.Items[i] = *p
+	}
+
+	nsList := &corev1.NamespaceList{Items: make([]corev1.Namespace, len(nsPtrs))}
+	for i, p := range nsPtrs {
+		nsList.Items[i] = *p
+	}
+
+	ings := &netv1.IngressList{Items: make([]netv1.Ingress, len(ingPtrs))}
+	for i, p := range ingPtrs {
+		ings.Items[i] = *p
+	}
+
+	hpas := &autov2.HorizontalPodAutoscalerList{Items: make([]autov2.HorizontalPodAutoscaler, len(hpaPtrs))}
+	for i, p := range hpaPtrs {
+		hpas.Items[i] = *p
+	}
+
+	pdbs := &policyv1.PodDisruptionBudgetList{Items: make([]policyv1.PodDisruptionBudget, len(pdbPtrs))}
+	for i, p := range pdbPtrs {
+		pdbs.Items[i] = *p
+	}
+
+	pvcList := &corev1.PersistentVolumeClaimList{Items: make([]corev1.PersistentVolumeClaim, len(pvcPtrs))}
+	for i, p := range pvcPtrs {
+		pvcList.Items[i] = *p
+	}
+
+	pvList := &corev1.PersistentVolumeList{Items: make([]corev1.PersistentVolume, len(pvPtrs))}
+	for i, p := range pvPtrs {
+		pvList.Items[i] = *p
+	}
+
+	scList := &storagev1.StorageClassList{Items: make([]storagev1.StorageClass, len(scPtrs))}
+	for i, p := range scPtrs {
+		scList.Items[i] = *p
+	}
+
+	// ── Compute ConfigMap metadata ──
+	cmMeta := make([]configMeta, 0, len(cmPtrs))
+	for _, cm := range cmPtrs {
+		if cm.Name == "kube-root-ca.crt" {
+			continue
+		}
+		keys := make([]string, 0, len(cm.Data)+len(cm.BinaryData))
+		for k := range cm.Data {
+			keys = append(keys, k)
+		}
+		for k := range cm.BinaryData {
+			keys = append(keys, k+" (binary)")
+		}
+		sort.Strings(keys)
+		lastMod := cm.CreationTimestamp.Time
+		if cm.ManagedFields != nil {
+			for _, mf := range cm.ManagedFields {
+				if mf.Time != nil && mf.Time.Time.After(lastMod) {
+					lastMod = mf.Time.Time
+				}
+			}
+		}
+		cmMeta = append(cmMeta, configMeta{Name: cm.Name, Namespace: cm.Namespace, Keys: keys, CreatedAt: cm.CreationTimestamp.Time, LastModified: lastMod, Version: cm.ResourceVersion})
+	}
+
+	// ── Compute Secret metadata ──
+	secMeta := make([]configMeta, 0, len(secPtrs))
+	for _, s := range secPtrs {
+		if s.Type == corev1.SecretTypeServiceAccountToken {
+			continue
+		}
+		if strings.HasPrefix(string(s.Type), "helm.sh/") {
+			continue
+		}
+		keys := make([]string, 0, len(s.Data)+len(s.StringData))
+		for k := range s.Data {
+			keys = append(keys, k)
+		}
+		for k := range s.StringData {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		lastMod := s.CreationTimestamp.Time
+		if s.ManagedFields != nil {
+			for _, mf := range s.ManagedFields {
+				if mf.Time != nil && mf.Time.Time.After(lastMod) {
+					lastMod = mf.Time.Time
+				}
+			}
+		}
+		secMeta = append(secMeta, configMeta{Name: s.Name, Namespace: s.Namespace, Keys: keys, Type: string(s.Type), CreatedAt: s.CreationTimestamp.Time, LastModified: lastMod, Version: s.ResourceVersion})
+	}
+
+	// ── Pre-build ReplicaSet → owner lookup map ──
+	rsMap := map[string]rsOwner{}
+	for _, rs := range rsPtrs {
+		for _, ref := range rs.OwnerReferences {
+			if ref.Controller != nil && *ref.Controller {
+				rsMap[rs.Namespace+"/"+rs.Name] = rsOwner{Kind: ref.Kind, Name: ref.Name}
+				break
+			}
+		}
+	}
+
+	// Store everything under write lock
+	c.mu.Lock()
+	c.nodes = nodes
+	c.pods = podPtrs
+	c.deployments = deps
+	c.statefulsets = sts
+	c.daemonsets = ds
+	c.services = svcs
+	c.jobs = jobs
+	c.cronjobs = cjobs
+	c.namespaces = nsList
+	c.events = eventPtrs
+	c.ingresses = ings
+	c.hpas = hpas
+	c.configMeta = cmMeta
+	c.secretMeta = secMeta
+	c.pdbs = pdbs
+	c.replicasets = rsPtrs
+	c.pvcs = pvcList
+	c.pvs = pvList
+	c.storageClasses = scList
+	c.rsOwners = rsMap
+	c.lastRefresh = time.Now()
+	c.mu.Unlock()
+
+	// Compute config drift outside the lock
+	drift := computeConfigDrift(podPtrs, cmMeta, secMeta)
+	c.mu.Lock()
+	c.configDrift = drift
+	c.mu.Unlock()
+}
+
+// ─── Metrics Polling ─────────────────────────────────────────────────
+//
+// Metrics-server doesn't support Watch, so node/pod metrics are polled
+// on a separate 10-second timer.
+
+func (c *clusterCache) refreshMetrics() {
+	if metricsCl == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var nodeMetrics *metricsapi.NodeMetricsList
+	var podMetrics *metricsapi.PodMetricsList
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		var err error
+		nodeMetrics, err = metricsCl.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			slog.Warn("metrics-server node metrics failed", "error", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		var err error
+		podMetrics, err = metricsCl.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			slog.Warn("metrics-server pod metrics failed", "error", err)
+		}
+	}()
+	wg.Wait()
+
 	pm := map[string][2]int64{}
 	if podMetrics != nil {
 		for _, m := range podMetrics.Items {
@@ -166,123 +340,98 @@ func (c *clusterCache) refresh() {
 		}
 		podSparklines.record(pm)
 	}
+
 	c.mu.Lock()
-	c.podMetricsMap = pm
-	c.mu.Unlock()
-
-	runtime.Gosched()
-
-	// Batch 2: workloads + events + ConfigMaps metadata (lightweight)
-	var wg2 sync.WaitGroup
-	wg2.Add(7)
-	go func() {
-		defer wg2.Done()
-		deps, _ = clientset.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
-		sts, _ = clientset.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{})
-		ds, _ = clientset.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{})
-	}()
-	go func() { defer wg2.Done(); svcs, _ = clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{}) }()
-	go func() {
-		defer wg2.Done()
-		jobs, _ = clientset.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
-		cjobs, _ = clientset.BatchV1().CronJobs("").List(ctx, metav1.ListOptions{})
-	}()
-	go func() { defer wg2.Done(); events, _ = clientset.CoreV1().Events("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg2.Done(); rsList, _ = clientset.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg2.Done(); pdbs, _ = clientset.PolicyV1().PodDisruptionBudgets("").List(ctx, metav1.ListOptions{}) }()
-	go func() {
-		defer wg2.Done()
-		if result, err := clientset.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{}); err == nil {
-			meta := make([]configMeta, 0, len(result.Items))
-			for _, cm := range result.Items {
-				if cm.Name == "kube-root-ca.crt" { continue }
-				keys := make([]string, 0, len(cm.Data)+len(cm.BinaryData))
-				for k := range cm.Data { keys = append(keys, k) }
-				for k := range cm.BinaryData { keys = append(keys, k+" (binary)") }
-				sort.Strings(keys)
-				lastMod := cm.CreationTimestamp.Time
-			if lm, ok := cm.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok && len(lm) > 0 {
-				lastMod = cm.CreationTimestamp.Time
-			}
-			if cm.ManagedFields != nil {
-				for _, mf := range cm.ManagedFields {
-					if mf.Time != nil && mf.Time.Time.After(lastMod) { lastMod = mf.Time.Time }
-				}
-			}
-			meta = append(meta, configMeta{Name: cm.Name, Namespace: cm.Namespace, Keys: keys, CreatedAt: cm.CreationTimestamp.Time, LastModified: lastMod, Version: cm.ResourceVersion})
-			}
-			cmMeta = meta
-		}
-	}()
-	wg2.Wait()
-	storeBatch()
-
-	// Pre-build ReplicaSet → owner map so /api/pods can resolve
-	// pod → RS → Deployment in O(1) instead of O(pods × replicaSets).
-	rsMap := map[string]rsOwner{}
-	if rsList != nil {
-		for _, rs := range rsList.Items {
-			for _, ref := range rs.OwnerReferences {
-				if ref.Controller != nil && *ref.Controller {
-					rsMap[rs.Namespace+"/"+rs.Name] = rsOwner{Kind: ref.Kind, Name: ref.Name}
-					break
-				}
-			}
-		}
+	if nodeMetrics != nil {
+		c.nodeMetrics = nodeMetrics
 	}
-	c.mu.Lock()
-	c.rsOwners = rsMap
-	c.mu.Unlock()
-
-	runtime.Gosched()
-
-	// Batch 3: secondary resources — Secrets (heavy binary), ingresses, HPAs, storage
-	var wg3 sync.WaitGroup
-	wg3.Add(6)
-	go func() { defer wg3.Done(); ings, _ = clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg3.Done(); hpas, _ = clientset.AutoscalingV2().HorizontalPodAutoscalers("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg3.Done(); pvcList, _ = clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg3.Done(); pvList, _ = clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{}) }()
-	go func() { defer wg3.Done(); scList, _ = clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{}) }()
-	go func() {
-		defer wg3.Done()
-		if result, err := clientset.CoreV1().Secrets("").List(ctx, metav1.ListOptions{}); err == nil {
-			meta := make([]configMeta, 0, len(result.Items))
-			for _, s := range result.Items {
-				if s.Type == corev1.SecretTypeServiceAccountToken { continue }
-				if strings.HasPrefix(string(s.Type), "helm.sh/") { continue }
-				keys := make([]string, 0, len(s.Data)+len(s.StringData))
-				for k := range s.Data { keys = append(keys, k) }
-				for k := range s.StringData { keys = append(keys, k) }
-				sort.Strings(keys)
-				lastMod := s.CreationTimestamp.Time
-			if s.ManagedFields != nil {
-				for _, mf := range s.ManagedFields {
-					if mf.Time != nil && mf.Time.Time.After(lastMod) { lastMod = mf.Time.Time }
-				}
-			}
-			meta = append(meta, configMeta{Name: s.Name, Namespace: s.Namespace, Keys: keys, Type: string(s.Type), CreatedAt: s.CreationTimestamp.Time, LastModified: lastMod, Version: s.ResourceVersion})
-			}
-			secMeta = meta
-		}
-	}()
-	wg3.Wait()
-	storeBatch()
-
-	// Compute config drift outside the lock — pods, cmMeta, secMeta are local
-	// variables that won't change, so no lock is needed for the computation.
-	drift := computeConfigDrift(pods, cmMeta, secMeta)
-	c.mu.Lock()
-	c.configDrift = drift
+	if podMetrics != nil {
+		c.podMetrics = podMetrics
+	}
+	c.podMetricsMap = pm
 	c.mu.Unlock()
 }
 
+// refresh rebuilds resource state from informer stores and re-polls
+// metrics.  Retained for backward-compatibility with mutation handlers
+// that call `go cache.refresh()`.
+func (c *clusterCache) refresh() {
+	c.rebuildFromInformers()
+	c.refreshMetrics()
+}
+
+// ─── Startup ─────────────────────────────────────────────────────────
+
 func startCacheLoop() {
-	cache.refresh()
+	// SharedInformerFactory: one initial List per resource type, then a
+	// persistent Watch stream for incremental updates.  Full re-list
+	// (resync) every 30 minutes as a consistency safety net.
+	informerFactory = informers.NewSharedInformerFactory(clientset, 30*time.Minute)
+
+	// Register all informers before Start()
+	informerFactory.Core().V1().Nodes().Informer()
+	informerFactory.Core().V1().Pods().Informer()
+	informerFactory.Apps().V1().Deployments().Informer()
+	informerFactory.Apps().V1().StatefulSets().Informer()
+	informerFactory.Apps().V1().DaemonSets().Informer()
+	informerFactory.Core().V1().Services().Informer()
+	informerFactory.Batch().V1().Jobs().Informer()
+	informerFactory.Batch().V1().CronJobs().Informer()
+	informerFactory.Core().V1().Namespaces().Informer()
+	informerFactory.Core().V1().Events().Informer()
+	informerFactory.Networking().V1().Ingresses().Informer()
+	informerFactory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
+	informerFactory.Core().V1().ConfigMaps().Informer()
+	informerFactory.Core().V1().Secrets().Informer()
+	informerFactory.Policy().V1().PodDisruptionBudgets().Informer()
+	informerFactory.Apps().V1().ReplicaSets().Informer()
+	informerFactory.Core().V1().PersistentVolumeClaims().Informer()
+	informerFactory.Core().V1().PersistentVolumes().Informer()
+	informerFactory.Storage().V1().StorageClasses().Informer()
+
+	stopCh := make(chan struct{})
+	informerFactory.Start(stopCh)
+	informerFactory.WaitForCacheSync(stopCh)
+
+	// Initial cache build
+	cache.rebuildFromInformers()
+	cache.refreshMetrics()
+
+	// ── Event-driven rebuilds with 500ms debounce ──
+	handler := kcache.ResourceEventHandlerFuncs{
+		AddFunc:    func(_ interface{}) { triggerRebuild() },
+		UpdateFunc: func(_, _ interface{}) { triggerRebuild() },
+		DeleteFunc: func(_ interface{}) { triggerRebuild() },
+	}
+	informerFactory.Core().V1().Pods().Informer().AddEventHandler(handler)
+	informerFactory.Core().V1().Nodes().Informer().AddEventHandler(handler)
+	informerFactory.Apps().V1().Deployments().Informer().AddEventHandler(handler)
+	informerFactory.Apps().V1().StatefulSets().Informer().AddEventHandler(handler)
+	informerFactory.Apps().V1().DaemonSets().Informer().AddEventHandler(handler)
+	informerFactory.Apps().V1().ReplicaSets().Informer().AddEventHandler(handler)
+	informerFactory.Batch().V1().Jobs().Informer().AddEventHandler(handler)
+	informerFactory.Batch().V1().CronJobs().Informer().AddEventHandler(handler)
+	informerFactory.Core().V1().Services().Informer().AddEventHandler(handler)
+	informerFactory.Core().V1().Events().Informer().AddEventHandler(handler)
+	informerFactory.Core().V1().ConfigMaps().Informer().AddEventHandler(handler)
+	informerFactory.Core().V1().Secrets().Informer().AddEventHandler(handler)
+
+	go func() {
+		for range informerRebuildCh {
+			time.Sleep(500 * time.Millisecond) // coalesce rapid events
+			select {
+			case <-informerRebuildCh:
+			default:
+			}
+			cache.rebuildFromInformers()
+		}
+	}()
+
+	// Metrics-server doesn't support Watch — poll separately
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		for range ticker.C {
-			cache.refresh()
+			cache.refreshMetrics()
 		}
 	}()
 }

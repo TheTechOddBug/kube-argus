@@ -67,11 +67,17 @@ func aiRateOK() bool {
 	cutoff := now.Add(-1 * time.Minute)
 	filtered := aiCallTimes[:0]
 	for _, t := range aiCallTimes {
-		if t.After(cutoff) { filtered = append(filtered, t) }
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
 	}
 	aiCallTimes = filtered
-	if len(aiCallTimes) >= aiMaxCallsPerMin { return false }
-	if aiConcurrent >= int32(aiMaxConcurrent) { return false }
+	if len(aiCallTimes) >= aiMaxCallsPerMin {
+		return false
+	}
+	if aiConcurrent >= int32(aiMaxConcurrent) {
+		return false
+	}
 	aiCallTimes = append(aiCallTimes, now)
 	aiConcurrent++
 	return true
@@ -81,10 +87,12 @@ func aiRateDone() {
 	aiRateMu.Lock()
 	defer aiRateMu.Unlock()
 	aiConcurrent--
-	if aiConcurrent < 0 { aiConcurrent = 0 }
+	if aiConcurrent < 0 {
+		aiConcurrent = 0
+	}
 }
 
-func streamLLM(w http.ResponseWriter, systemPrompt, userPrompt string) {
+func streamLLM(w http.ResponseWriter, r *http.Request, systemPrompt, userPrompt string) {
 	if !aiEnabled || llmGatewayURL == "" {
 		je(w, `{"error":"AI not available — LLM Gateway not configured"}`, 503)
 		return
@@ -110,7 +118,7 @@ func streamLLM(w http.ResponseWriter, systemPrompt, userPrompt string) {
 
 	slog.Debug("ai: POST request", "url", llmGatewayURL, "model", llmGatewayModel, "body_len", len(reqBody))
 
-	req, err := http.NewRequest("POST", llmGatewayURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(r.Context(), "POST", llmGatewayURL, bytes.NewReader(reqBody))
 	if err != nil {
 		je(w, `{"error":"failed to build LLM request"}`, 500)
 		return
@@ -148,9 +156,13 @@ func streamLLM(w http.ResponseWriter, systemPrompt, userPrompt string) {
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") { continue }
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
 		payload := strings.TrimPrefix(line, "data: ")
-		if payload == "[DONE]" { break }
+		if payload == "[DONE]" {
+			break
+		}
 
 		var chunk struct {
 			Choices []struct {
@@ -159,7 +171,9 @@ func streamLLM(w http.ResponseWriter, systemPrompt, userPrompt string) {
 				} `json:"delta"`
 			} `json:"choices"`
 		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil { continue }
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 			data, _ := json.Marshal(map[string]string{"text": chunk.Choices[0].Delta.Content})
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -172,20 +186,24 @@ func streamLLM(w http.ResponseWriter, systemPrompt, userPrompt string) {
 
 // ─── AI: API Handlers ────────────────────────────────────────────────
 
-
 func apiAIDiagnose(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" { je(w, "POST only", 405); return }
+	if r.Method != "POST" {
+		je(w, "POST only", 405)
+		return
+	}
 	var body struct {
 		Namespace string `json:"namespace"`
 		Pod       string `json:"pod"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Pod == "" {
-		je(w, `{"error":"namespace and pod are required"}`, 400); return
+		je(w, `{"error":"namespace and pod are required"}`, 400)
+		return
 	}
 
 	podCtx := buildPodDiagnosticContext(body.Namespace, body.Pod)
 	if podCtx == "" {
-		je(w, `{"error":"pod not found"}`, 404); return
+		je(w, `{"error":"pod not found"}`, 404)
+		return
 	}
 
 	systemPrompt := `You are a terse Kubernetes troubleshooter embedded in an ops dashboard. Space is precious.
@@ -206,13 +224,14 @@ Rules:
 
 	userPrompt := fmt.Sprintf("Diagnose this Kubernetes pod:\n\n%s", podCtx)
 
-	streamLLM(w, systemPrompt, userPrompt)
+	streamLLM(w, r, systemPrompt, userPrompt)
 }
 
 func apiAISpotAnalysis(w http.ResponseWriter, r *http.Request) {
 	spotCtx := buildSpotAdvisorContext()
 	if spotCtx == "" {
-		je(w, `{"error":"no spot data available"}`, 404); return
+		je(w, `{"error":"no spot data available"}`, 404)
+		return
 	}
 
 	systemPrompt := `You are a terse AWS Spot-instance advisor in an ops dashboard. Space is precious.
@@ -225,35 +244,48 @@ Rules:
 
 	userPrompt := fmt.Sprintf("Analyze this Kubernetes spot instance fleet and provide optimization recommendations:\n\n%s", spotCtx)
 
-	streamLLM(w, systemPrompt, userPrompt)
+	streamLLM(w, r, systemPrompt, userPrompt)
 }
 
 // ─── AI: Context builders ────────────────────────────────────────────
 
-
 func buildPodDiagnosticContext(ns, podName string) string {
 	cache.mu.RLock()
 
-	if cache.pods == nil { cache.mu.RUnlock(); return "" }
+	if cache.pods == nil {
+		cache.mu.RUnlock()
+		return ""
+	}
 
 	var targetPod *corev1.Pod
-	for i := range cache.pods.Items {
-		p := &cache.pods.Items[i]
-		if p.Namespace == ns && p.Name == podName { targetPod = p; break }
+	for _, p := range cache.pods {
+		if p.Namespace == ns && p.Name == podName {
+			targetPod = p
+			break
+		}
 	}
-	if targetPod == nil { cache.mu.RUnlock(); return "" }
+	if targetPod == nil {
+		cache.mu.RUnlock()
+		return ""
+	}
 
 	var sb strings.Builder
 	p := targetPod
 
 	sb.WriteString(fmt.Sprintf("## Pod: %s/%s\n", p.Namespace, p.Name))
-	sb.WriteString(fmt.Sprintf("Status: %s\n", podDisplayStatus(*p)))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", podDisplayStatus(p)))
 	sb.WriteString(fmt.Sprintf("Phase: %s\n", p.Status.Phase))
-	if p.Status.Reason != "" { sb.WriteString(fmt.Sprintf("Reason: %s\n", p.Status.Reason)) }
-	if p.Status.Message != "" { sb.WriteString(fmt.Sprintf("Message: %s\n", p.Status.Message)) }
+	if p.Status.Reason != "" {
+		sb.WriteString(fmt.Sprintf("Reason: %s\n", p.Status.Reason))
+	}
+	if p.Status.Message != "" {
+		sb.WriteString(fmt.Sprintf("Message: %s\n", p.Status.Message))
+	}
 	sb.WriteString(fmt.Sprintf("Node: %s\n", p.Spec.NodeName))
 	sb.WriteString(fmt.Sprintf("Age: %s\n", shortDur(time.Since(p.CreationTimestamp.Time))))
-	if p.DeletionTimestamp != nil { sb.WriteString("⚠ Pod is being DELETED\n") }
+	if p.DeletionTimestamp != nil {
+		sb.WriteString("⚠ Pod is being DELETED\n")
+	}
 
 	// Container statuses
 	sb.WriteString("\n### Container Statuses:\n")
@@ -345,14 +377,18 @@ func buildPodDiagnosticContext(ns, podName string) string {
 	if cache.events != nil {
 		sb.WriteString("\n### Related Events:\n")
 		count := 0
-		for _, e := range cache.events.Items {
+		for _, e := range cache.events {
 			if e.InvolvedObject.Name == podName && e.InvolvedObject.Namespace == ns {
 				sb.WriteString(fmt.Sprintf("- [%s] %s %s: %s\n", shortDur(time.Since(e.LastTimestamp.Time)), e.Type, e.Reason, e.Message))
 				count++
-				if count >= 30 { break }
+				if count >= 30 {
+					break
+				}
 			}
 		}
-		if count == 0 { sb.WriteString("No recent events\n") }
+		if count == 0 {
+			sb.WriteString("No recent events\n")
+		}
 	}
 
 	cache.mu.RUnlock()
@@ -378,7 +414,9 @@ func buildPodDiagnosticContext(ns, podName string) string {
 			continue
 		}
 		logStr := string(logBytes)
-		if logStr == "" { logStr = "(empty)" }
+		if logStr == "" {
+			logStr = "(empty)"
+		}
 		sb.WriteString(fmt.Sprintf("\n#### Container: %s (current)\n```\n%s\n```\n", cName, logStr))
 
 		// Previous terminated container logs (useful for CrashLoopBackOff)
@@ -404,7 +442,9 @@ func buildSpotAdvisorContext() string {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 
-	if spotCache.entries == nil || cache.nodes == nil { return "" }
+	if spotCache.entries == nil || cache.nodes == nil {
+		return ""
+	}
 
 	var sb strings.Builder
 	sb.WriteString("## Spot Instance Fleet Analysis\n\n")
@@ -420,10 +460,10 @@ func buildSpotAdvisorContext() string {
 
 	// Collect spot nodes grouped by instance type
 	type nodeInfo struct {
-		Name     string
-		CPU, Mem int64 // allocatable
+		Name             string
+		CPU, Mem         int64 // allocatable
 		UsedCPU, UsedMem int64
-		Nodepool string
+		Nodepool         string
 	}
 	typeNodes := map[string][]nodeInfo{}
 	totalSpot := 0
@@ -431,20 +471,28 @@ func buildSpotAdvisorContext() string {
 	for _, n := range cache.nodes.Items {
 		capType := n.Labels["karpenter.sh/capacity-type"]
 		if capType == "" {
-			if v, ok := n.Labels["eks.amazonaws.com/capacityType"]; ok { capType = strings.ToLower(v) }
+			if v, ok := n.Labels["eks.amazonaws.com/capacityType"]; ok {
+				capType = strings.ToLower(v)
+			}
 		}
-		if capType != "spot" { continue }
+		if capType != "spot" {
+			continue
+		}
 		totalSpot++
 
 		itype := n.Labels["node.kubernetes.io/instance-type"]
-		if itype == "" { itype = n.Labels["beta.kubernetes.io/instance-type"] }
-		if itype == "" { continue }
+		if itype == "" {
+			itype = n.Labels["beta.kubernetes.io/instance-type"]
+		}
+		if itype == "" {
+			continue
+		}
 
 		usage := nodeUsage[n.Name]
 		typeNodes[itype] = append(typeNodes[itype], nodeInfo{
-			Name: n.Name,
-			CPU: n.Status.Allocatable.Cpu().MilliValue(),
-			Mem: n.Status.Allocatable.Memory().Value() / (1024 * 1024),
+			Name:    n.Name,
+			CPU:     n.Status.Allocatable.Cpu().MilliValue(),
+			Mem:     n.Status.Allocatable.Memory().Value() / (1024 * 1024),
 			UsedCPU: usage[0], UsedMem: usage[1],
 			Nodepool: n.Labels["karpenter.sh/nodepool"],
 		})
@@ -459,20 +507,30 @@ func buildSpotAdvisorContext() string {
 		var totalAllocCPU, totalAllocMem, totalUsedCPU, totalUsedMem int64
 		npSet := map[string]bool{}
 		for _, n := range nodes {
-			totalAllocCPU += n.CPU; totalAllocMem += n.Mem
-			totalUsedCPU += n.UsedCPU; totalUsedMem += n.UsedMem
-			if n.Nodepool != "" { npSet[n.Nodepool] = true }
+			totalAllocCPU += n.CPU
+			totalAllocMem += n.Mem
+			totalUsedCPU += n.UsedCPU
+			totalUsedMem += n.UsedMem
+			if n.Nodepool != "" {
+				npSet[n.Nodepool] = true
+			}
 		}
 		cnt := len(nodes)
 		avgCPU := totalUsedCPU / int64(cnt)
 		avgMem := totalUsedMem / int64(cnt)
 		utilCPU, utilMem := 0, 0
-		if totalAllocCPU > 0 { utilCPU = int(totalUsedCPU * 100 / totalAllocCPU) }
-		if totalAllocMem > 0 { utilMem = int(totalUsedMem * 100 / totalAllocMem) }
+		if totalAllocCPU > 0 {
+			utilCPU = int(totalUsedCPU * 100 / totalAllocCPU)
+		}
+		if totalAllocMem > 0 {
+			utilMem = int(totalUsedMem * 100 / totalAllocMem)
+		}
 		price := spotCache.spotPrices[itype]
 		entry := spotCache.entries[itype]
 		nps := []string{}
-		for np := range npSet { nps = append(nps, np) }
+		for np := range npSet {
+			nps = append(nps, np)
+		}
 
 		sb.WriteString(fmt.Sprintf("%s | %d | %d | %d | %d | %d | %d%% | %d%% | $%.4f/hr | $%.0f/mo | %s | %s\n",
 			itype, cnt, totalAllocCPU/int64(cnt), totalAllocMem/int64(cnt),
@@ -487,11 +545,17 @@ func buildSpotAdvisorContext() string {
 		alts := generateAlternatives(itype)
 		shown := 0
 		for _, alt := range alts {
-			if shown >= 5 { break }
+			if shown >= 5 {
+				break
+			}
 			entry, ok := spotCache.entries[alt]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			spec, ok := spotCache.typeSpecs[alt]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			price := spotCache.spotPrices[alt]
 			sb.WriteString(fmt.Sprintf("%s | %s | %d | %.1f | $%.4f/hr | %s | %d%%\n",
 				itype, alt, spec.Cores, spec.RamGB, price, interruptLabel(entry.R), entry.S))

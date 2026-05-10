@@ -32,6 +32,20 @@ func initPrometheus() {
 	}
 	promBaseURL = base
 	slog.Info("prometheus configured", "endpoint", promBaseURL+"/api/v1/query_range")
+
+	// Periodic eviction of stale cache entries to prevent unbounded memory growth
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		for range ticker.C {
+			promCache.mu.Lock()
+			for k, e := range promCache.entries {
+				if time.Since(e.ts) > promCacheTTL {
+					delete(promCache.entries, k)
+				}
+			}
+			promCache.mu.Unlock()
+		}
+	}()
 }
 
 // ─── Prometheus Query Cache (30s TTL) ────────────────────────────────
@@ -53,6 +67,20 @@ func init() { promCache.entries = make(map[string]promCacheEntry) }
 func promQuery(query, start, end, step string) ([]byte, error) {
 	if promBaseURL == "" {
 		return nil, fmt.Errorf("PROMETHEUS_URL not configured")
+	}
+
+	// Round start/end to step boundaries so the cache key stays stable
+	// across requests within the same step window.  Without this, the key
+	// changes every second (since start = now - duration) and the 30s TTL
+	// cache is effectively useless.
+	if stepDur, err := time.ParseDuration(step); err == nil && stepDur > 0 {
+		stepSec := int64(stepDur.Seconds())
+		if startUnix, err := strconv.ParseInt(start, 10, 64); err == nil {
+			start = strconv.FormatInt((startUnix/stepSec)*stepSec, 10)
+		}
+		if endUnix, err := strconv.ParseInt(end, 10, 64); err == nil {
+			end = strconv.FormatInt(((endUnix+stepSec-1)/stepSec)*stepSec, 10)
+		}
 	}
 
 	cacheKey := query + "|" + start + "|" + end + "|" + step
@@ -94,18 +122,14 @@ func promQuery(query, start, end, step string) ([]byte, error) {
 	}
 	if resp.StatusCode != 200 {
 		truncLen := len(body)
-		if truncLen > 200 { truncLen = 200 }
+		if truncLen > 200 {
+			truncLen = 200
+		}
 		return nil, fmt.Errorf("prometheus returned %d: %s", resp.StatusCode, string(body[:truncLen]))
 	}
 
 	promCache.mu.Lock()
 	promCache.entries[cacheKey] = promCacheEntry{data: body, ts: time.Now()}
-	// Evict stale entries periodically.
-	if len(promCache.entries) > 200 {
-		for k, e := range promCache.entries {
-			if time.Since(e.ts) > promCacheTTL { delete(promCache.entries, k) }
-		}
-	}
 	promCache.mu.Unlock()
 
 	return body, nil
@@ -120,7 +144,9 @@ func promInstantQuery(query string) (float64, error) {
 
 	u := promBaseURL + "/api/v1/query"
 	req, err := http.NewRequest("GET", u, nil)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	q := req.URL.Query()
 	q.Set("query", query)
 	q.Set("time", fmt.Sprintf("%d", time.Now().Unix()))
@@ -130,13 +156,19 @@ func promInstantQuery(query string) (float64, error) {
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	if resp.StatusCode != 200 {
 		truncLen := len(body)
-		if truncLen > 200 { truncLen = 200 }
+		if truncLen > 200 {
+			truncLen = 200
+		}
 		return 0, fmt.Errorf("prometheus %d: %s", resp.StatusCode, string(body[:truncLen]))
 	}
 	var result struct {
@@ -146,10 +178,16 @@ func promInstantQuery(query string) (float64, error) {
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil { return 0, err }
-	if len(result.Data.Result) == 0 { return 0, nil }
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, err
+	}
+	if len(result.Data.Result) == 0 {
+		return 0, nil
+	}
 	valStr, ok := result.Data.Result[0].Value[1].(string)
-	if !ok { return 0, nil }
+	if !ok {
+		return 0, nil
+	}
 	return strconv.ParseFloat(valStr, 64)
 }
 
@@ -234,10 +272,10 @@ func apiWorkloadSizing(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := make(chan promResult, 4)
 	queries := map[string]string{
-		"cpuAvg":  fmt.Sprintf(`avg_over_time(sum(rate(container_cpu_usage_seconds_total{%s}[5m]))[7d:5m])`, podFilter),
-		"cpuMax":  fmt.Sprintf(`max_over_time(sum(rate(container_cpu_usage_seconds_total{%s}[5m]))[7d:5m])`, podFilter),
-		"memAvg":  fmt.Sprintf(`avg_over_time(sum(container_memory_working_set_bytes{%s})[7d:5m])`, podFilter),
-		"memMax":  fmt.Sprintf(`max_over_time(sum(container_memory_working_set_bytes{%s})[7d:5m])`, podFilter),
+		"cpuAvg": fmt.Sprintf(`avg_over_time(sum(rate(container_cpu_usage_seconds_total{%s}[5m]))[7d:5m])`, podFilter),
+		"cpuMax": fmt.Sprintf(`max_over_time(sum(rate(container_cpu_usage_seconds_total{%s}[5m]))[7d:5m])`, podFilter),
+		"memAvg": fmt.Sprintf(`avg_over_time(sum(container_memory_working_set_bytes{%s})[7d:5m])`, podFilter),
+		"memMax": fmt.Sprintf(`max_over_time(sum(container_memory_working_set_bytes{%s})[7d:5m])`, podFilter),
 	}
 	for k, q := range queries {
 		go func(key, query string) {
@@ -261,7 +299,9 @@ func apiWorkloadSizing(w http.ResponseWriter, r *http.Request) {
 
 	round10 := func(v int64) int64 { return ((v + 9) / 10) * 10 }
 	roundMi := func(v int64) int64 {
-		if v < 128 { return ((v + 7) / 8) * 8 }
+		if v < 128 {
+			return ((v + 7) / 8) * 8
+		}
 		return ((v + 31) / 32) * 32
 	}
 
@@ -270,10 +310,18 @@ func apiWorkloadSizing(w http.ResponseWriter, r *http.Request) {
 	recMemReq := roundMi(memAvgMi * 120 / 100)
 	recMemLim := roundMi(memMaxMi * 120 / 100)
 
-	if recCpuReq < 10 { recCpuReq = 10 }
-	if recCpuLim < recCpuReq { recCpuLim = recCpuReq }
-	if recMemReq < 32 { recMemReq = 32 }
-	if recMemLim < recMemReq { recMemLim = recMemReq }
+	if recCpuReq < 10 {
+		recCpuReq = 10
+	}
+	if recCpuLim < recCpuReq {
+		recCpuLim = recCpuReq
+	}
+	if recMemReq < 32 {
+		recMemReq = 32
+	}
+	if recMemLim < recMemReq {
+		recMemLim = recMemReq
+	}
 
 	sizing := "ok"
 	if cpuReqM > 0 && recCpuReq < cpuReqM*50/100 {
@@ -288,11 +336,11 @@ func apiWorkloadSizing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j(w, map[string]interface{}{
-		"current": map[string]int64{"cpuReqM": cpuReqM, "cpuLimM": cpuLimM, "memReqMi": memReqMi, "memLimMi": memLimMi},
-		"observed": map[string]int64{"cpuAvgM": cpuAvgM, "cpuMaxM": cpuMaxM, "memAvgMi": memAvgMi, "memMaxMi": memMaxMi},
+		"current":     map[string]int64{"cpuReqM": cpuReqM, "cpuLimM": cpuLimM, "memReqMi": memReqMi, "memLimMi": memLimMi},
+		"observed":    map[string]int64{"cpuAvgM": cpuAvgM, "cpuMaxM": cpuMaxM, "memAvgMi": memAvgMi, "memMaxMi": memMaxMi},
 		"recommended": map[string]int64{"cpuReqM": recCpuReq, "cpuLimM": recCpuLim, "memReqMi": recMemReq, "memLimMi": recMemLim},
-		"sizing": sizing,
-		"source": "prometheus-7d-avg",
+		"sizing":      sizing,
+		"source":      "prometheus-7d-avg",
 	})
 }
 
@@ -354,9 +402,13 @@ func apiAlerts(w http.ResponseWriter, r *http.Request) {
 
 	alerts := make([]alertOut, 0)
 	for _, a := range result.Data.Alerts {
-		if a.State != "firing" { continue }
+		if a.State != "firing" {
+			continue
+		}
 		sev := a.Labels["severity"]
-		if sev == "" { sev = "warning" }
+		if sev == "" {
+			sev = "warning"
+		}
 		since := a.ActiveAt
 		if t, err := time.Parse(time.RFC3339, a.ActiveAt); err == nil {
 			since = shortDur(time.Since(t))
@@ -372,12 +424,13 @@ func apiAlerts(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(alerts, func(i, k int) bool {
 		sevOrder := map[string]int{"critical": 0, "warning": 1, "info": 2}
 		si, sk := sevOrder[alerts[i].Severity], sevOrder[alerts[k].Severity]
-		if si != sk { return si < sk }
+		if si != sk {
+			return si < sk
+		}
 		return alerts[i].Name < alerts[k].Name
 	})
 	j(w, map[string]interface{}{"alerts": alerts})
 }
-
 
 func apiMetricsNode(w http.ResponseWriter, r *http.Request) {
 	if promBaseURL == "" {
@@ -536,8 +589,7 @@ func apiMetricsPod(w http.ResponseWriter, r *http.Request) {
 
 	cache.mu.RLock()
 	if cache.pods != nil {
-		for i := range cache.pods.Items {
-			p := &cache.pods.Items[i]
+		for _, p := range cache.pods {
 			if p.Namespace == ns && p.Name == pod {
 				for _, c := range p.Spec.Containers {
 					cr := containerResources{Container: c.Name}
@@ -642,25 +694,25 @@ func apiMetricsWorkload(w http.ResponseWriter, r *http.Request) {
 
 		"rr_cpu_req_per_pod": fmt.Sprintf(`sum(kube_pod_container_resource_requests{namespace="%s", resource="cpu"} * on(namespace,pod) group_left(workload, workload_type) %s) by (pod)`, ns, ownerJoin),
 		"rr_cpu_lim_per_pod": fmt.Sprintf(`sum(kube_pod_container_resource_limits{namespace="%s", resource="cpu"} * on(namespace,pod) group_left(workload, workload_type) %s) by (pod)`, ns, ownerJoin),
-		"rr_cpu_req_pct": fmt.Sprintf(`sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="%s"} * on(namespace,pod) group_left(workload, workload_type) %s) / sum(kube_pod_container_resource_requests{namespace="%s", resource="cpu"} * on(namespace,pod) group_left(workload, workload_type) %s)`, ns, ownerJoin, ns, ownerJoin),
+		"rr_cpu_req_pct":     fmt.Sprintf(`sum(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{namespace="%s"} * on(namespace,pod) group_left(workload, workload_type) %s) / sum(kube_pod_container_resource_requests{namespace="%s", resource="cpu"} * on(namespace,pod) group_left(workload, workload_type) %s)`, ns, ownerJoin, ns, ownerJoin),
 		"rr_mem_req_per_pod": fmt.Sprintf(`sum(kube_pod_container_resource_requests{namespace="%s", resource="memory"} * on(namespace,pod) group_left(workload, workload_type) %s) by (pod)`, ns, ownerJoin),
 		"rr_mem_lim_per_pod": fmt.Sprintf(`sum(kube_pod_container_resource_limits{namespace="%s", resource="memory"} * on(namespace,pod) group_left(workload, workload_type) %s) by (pod)`, ns, ownerJoin),
 
 		// Raw cadvisor fallback — aggregated totals
-		"cpu_total":    fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 1000`, ns, podMatcher, rateWindow),
-		"mem_total":    fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",pod=~"%s",container!="",container!="POD"}) / (1024*1024)`, ns, podMatcher),
+		"cpu_total": fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 1000`, ns, podMatcher, rateWindow),
+		"mem_total": fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",pod=~"%s",container!="",container!="POD"}) / (1024*1024)`, ns, podMatcher),
 
 		// Raw cadvisor fallback — per-pod
-		"cpu_per_pod":  fmt.Sprintf(`sum by(pod)(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 1000`, ns, podMatcher, rateWindow),
-		"mem_per_pod":  fmt.Sprintf(`sum by(pod)(container_memory_working_set_bytes{namespace="%s",pod=~"%s",container!="",container!="POD"}) / (1024*1024)`, ns, podMatcher),
+		"cpu_per_pod": fmt.Sprintf(`sum by(pod)(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 1000`, ns, podMatcher, rateWindow),
+		"mem_per_pod": fmt.Sprintf(`sum by(pod)(container_memory_working_set_bytes{namespace="%s",pod=~"%s",container!="",container!="POD"}) / (1024*1024)`, ns, podMatcher),
 
-		"throttle":     fmt.Sprintf(`sum(rate(container_cpu_cfs_throttled_periods_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) / sum(rate(container_cpu_cfs_periods_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 100`, ns, podMatcher, rateWindow, ns, podMatcher, rateWindow),
+		"throttle": fmt.Sprintf(`sum(rate(container_cpu_cfs_throttled_periods_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) / sum(rate(container_cpu_cfs_periods_total{namespace="%s",pod=~"%s",container!="",container!="POD"}[%s])) * 100`, ns, podMatcher, rateWindow, ns, podMatcher, rateWindow),
 
 		// ── kube-state-metrics (work in both envs) ──
-		"restarts":       fmt.Sprintf(`sum by(pod)(kube_pod_container_status_restarts_total{namespace="%s",pod=~"%s"})`, ns, podMatcher),
-		"pods_running":   fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Running"} == 1)`, ns, podMatcher),
-		"pods_pending":   fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Pending"} == 1)`, ns, podMatcher),
-		"pods_failed":    fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Failed"} == 1)`, ns, podMatcher),
+		"restarts":             fmt.Sprintf(`sum by(pod)(kube_pod_container_status_restarts_total{namespace="%s",pod=~"%s"})`, ns, podMatcher),
+		"pods_running":         fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Running"} == 1)`, ns, podMatcher),
+		"pods_pending":         fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Pending"} == 1)`, ns, podMatcher),
+		"pods_failed":          fmt.Sprintf(`count(kube_pod_status_phase{namespace="%s",pod=~"%s",phase="Failed"} == 1)`, ns, podMatcher),
 		"containers_ready":     fmt.Sprintf(`sum(kube_pod_container_status_ready{namespace="%s",pod=~"%s"})`, ns, podMatcher),
 		"containers_not_ready": fmt.Sprintf(`sum(kube_pod_container_status_ready{namespace="%s",pod=~"%s"} == 0)`, ns, podMatcher),
 	}
@@ -707,7 +759,8 @@ func apiMetricsWorkload(w http.ResponseWriter, r *http.Request) {
 			if cache.deployments != nil {
 				for _, d := range cache.deployments.Items {
 					if d.Name == name && d.Namespace == ns && d.Spec.Selector != nil {
-						selector = d.Spec.Selector.MatchLabels; break
+						selector = d.Spec.Selector.MatchLabels
+						break
 					}
 				}
 			}
@@ -715,7 +768,8 @@ func apiMetricsWorkload(w http.ResponseWriter, r *http.Request) {
 			if cache.statefulsets != nil {
 				for _, s := range cache.statefulsets.Items {
 					if s.Name == name && s.Namespace == ns && s.Spec.Selector != nil {
-						selector = s.Spec.Selector.MatchLabels; break
+						selector = s.Spec.Selector.MatchLabels
+						break
 					}
 				}
 			}
@@ -723,29 +777,48 @@ func apiMetricsWorkload(w http.ResponseWriter, r *http.Request) {
 			if cache.daemonsets != nil {
 				for _, d := range cache.daemonsets.Items {
 					if d.Name == name && d.Namespace == ns && d.Spec.Selector != nil {
-						selector = d.Spec.Selector.MatchLabels; break
+						selector = d.Spec.Selector.MatchLabels
+						break
 					}
 				}
 			}
 		}
 
 		if len(selector) > 0 {
-			for i := range cache.pods.Items {
-				p := &cache.pods.Items[i]
-				if p.Namespace != ns { continue }
-				if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending { continue }
+			for _, p := range cache.pods {
+				if p.Namespace != ns {
+					continue
+				}
+				if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending {
+					continue
+				}
 				match := true
-				for k, v := range selector { if p.Labels[k] != v { match = false; break } }
-				if !match { continue }
+				for k, v := range selector {
+					if p.Labels[k] != v {
+						match = false
+						break
+					}
+				}
+				if !match {
+					continue
+				}
 				res.Replicas++
 				for _, c := range p.Spec.Containers {
 					if c.Resources.Requests != nil {
-						if v, ok := c.Resources.Requests[corev1.ResourceCPU]; ok { res.CpuReqM += float64(v.MilliValue()) }
-						if v, ok := c.Resources.Requests[corev1.ResourceMemory]; ok { res.MemReqMi += float64(v.Value()) / (1024 * 1024) }
+						if v, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+							res.CpuReqM += float64(v.MilliValue())
+						}
+						if v, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+							res.MemReqMi += float64(v.Value()) / (1024 * 1024)
+						}
 					}
 					if c.Resources.Limits != nil {
-						if v, ok := c.Resources.Limits[corev1.ResourceCPU]; ok { res.CpuLimM += float64(v.MilliValue()) }
-						if v, ok := c.Resources.Limits[corev1.ResourceMemory]; ok { res.MemLimMi += float64(v.Value()) / (1024 * 1024) }
+						if v, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+							res.CpuLimM += float64(v.MilliValue())
+						}
+						if v, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+							res.MemLimMi += float64(v.Value()) / (1024 * 1024)
+						}
 					}
 				}
 			}
@@ -763,7 +836,7 @@ func apiMetricsWorkload(w http.ResponseWriter, r *http.Request) {
 }
 
 type promMetricSeries struct {
-	Name   string      `json:"name"`
+	Name   string       `json:"name"`
 	Values [][2]float64 `json:"values"`
 }
 
@@ -797,7 +870,13 @@ func promQueryParallel(queries map[string]string, startStr, endStr, step string)
 			series := make([]promMetricSeries, 0, len(promResp.Data.Result))
 			for _, r := range promResp.Data.Result {
 				label := n
-				if v, ok := r.Metric["pod"]; ok { label = v } else if v, ok := r.Metric["container"]; ok { label = v } else if v, ok := r.Metric["device"]; ok { label = v }
+				if v, ok := r.Metric["pod"]; ok {
+					label = v
+				} else if v, ok := r.Metric["container"]; ok {
+					label = v
+				} else if v, ok := r.Metric["device"]; ok {
+					label = v
+				}
 				vals := make([][2]float64, 0, len(r.Values))
 				for _, v := range r.Values {
 					ts, _ := v[0].(float64)

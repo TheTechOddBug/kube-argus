@@ -50,8 +50,10 @@ func apiStorage(w http.ResponseWriter, r *http.Request) {
 
 	pvcToWorkload := map[string]*pvcWorkload{}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items {
-			if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending { continue }
+		for _, p := range cache.pods {
+			if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending {
+				continue
+			}
 			ownerKind, ownerName := "", ""
 			for _, ref := range p.OwnerReferences {
 				ownerKind = ref.Kind
@@ -76,23 +78,35 @@ func apiStorage(w http.ResponseWriter, r *http.Request) {
 	pvcs := []pvcEntry{}
 	if cache.pvcs != nil {
 		for _, pvc := range cache.pvcs.Items {
-			if nsFilter != "" && pvc.Namespace != nsFilter { continue }
+			if nsFilter != "" && pvc.Namespace != nsFilter {
+				continue
+			}
 			sc := ""
-			if pvc.Spec.StorageClassName != nil { sc = *pvc.Spec.StorageClassName }
+			if pvc.Spec.StorageClassName != nil {
+				sc = *pvc.Spec.StorageClassName
+			}
 			cap := ""
-			if s, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok { cap = s.String() }
+			if s, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
+				cap = s.String()
+			}
 			if cap == "" {
-				if s, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok { cap = s.String() }
+				if s, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+					cap = s.String()
+				}
 			}
 			modes := []string{}
-			for _, m := range pvc.Spec.AccessModes { modes = append(modes, string(m)) }
+			for _, m := range pvc.Spec.AccessModes {
+				modes = append(modes, string(m))
+			}
 			entry := pvcEntry{
 				Name: pvc.Name, Namespace: pvc.Namespace,
 				Status: string(pvc.Status.Phase), VolumeName: pvc.Spec.VolumeName,
 				StorageClass: sc, Capacity: cap, AccessModes: modes,
 				Age: shortDur(time.Since(pvc.CreationTimestamp.Time)),
 			}
-			if wl, ok := pvcToWorkload[pvc.Namespace+"/"+pvc.Name]; ok { entry.Workload = wl }
+			if wl, ok := pvcToWorkload[pvc.Namespace+"/"+pvc.Name]; ok {
+				entry.Workload = wl
+			}
 			pvcs = append(pvcs, entry)
 		}
 	}
@@ -101,19 +115,31 @@ func apiStorage(w http.ResponseWriter, r *http.Request) {
 	if cache.pvs != nil {
 		for _, pv := range cache.pvs.Items {
 			claim := ""
-			if pv.Spec.ClaimRef != nil { claim = pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name }
+			if pv.Spec.ClaimRef != nil {
+				claim = pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name
+			}
 			cap := ""
-			if s, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok { cap = s.String() }
+			if s, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok {
+				cap = s.String()
+			}
 			sc := pv.Spec.StorageClassName
 			source := "unknown"
-			if pv.Spec.CSI != nil { source = pv.Spec.CSI.Driver }
-			if pv.Spec.AWSElasticBlockStore != nil { source = "aws-ebs" }
-			if pv.Spec.NFS != nil { source = "nfs" }
-			if pv.Spec.HostPath != nil { source = "hostPath" }
+			if pv.Spec.CSI != nil {
+				source = pv.Spec.CSI.Driver
+			}
+			if pv.Spec.AWSElasticBlockStore != nil {
+				source = "aws-ebs"
+			}
+			if pv.Spec.NFS != nil {
+				source = "nfs"
+			}
+			if pv.Spec.HostPath != nil {
+				source = "hostPath"
+			}
 			pvs = append(pvs, pvEntry{
 				Name: pv.Name, Status: string(pv.Status.Phase), Capacity: cap,
 				ReclaimPolicy: string(pv.Spec.PersistentVolumeReclaimPolicy),
-				StorageClass: sc, ClaimRef: claim,
+				StorageClass:  sc, ClaimRef: claim,
 				Age: shortDur(time.Since(pv.CreationTimestamp.Time)), Source: source,
 			})
 		}
@@ -123,11 +149,17 @@ func apiStorage(w http.ResponseWriter, r *http.Request) {
 	if cache.storageClasses != nil {
 		for _, sc := range cache.storageClasses.Items {
 			rp := "Delete"
-			if sc.ReclaimPolicy != nil { rp = string(*sc.ReclaimPolicy) }
+			if sc.ReclaimPolicy != nil {
+				rp = string(*sc.ReclaimPolicy)
+			}
 			bm := "Immediate"
-			if sc.VolumeBindingMode != nil { bm = string(*sc.VolumeBindingMode) }
+			if sc.VolumeBindingMode != nil {
+				bm = string(*sc.VolumeBindingMode)
+			}
 			isDef := false
-			if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" { isDef = true }
+			if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+				isDef = true
+			}
 			scs = append(scs, scEntry{
 				Name: sc.Name, Provisioner: sc.Provisioner,
 				ReclaimPolicy: rp, BindingMode: bm, IsDefault: isDef,

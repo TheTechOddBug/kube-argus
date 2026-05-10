@@ -41,7 +41,7 @@ func gzipWrap(h http.Handler) http.Handler {
 			return
 		}
 		p := r.URL.Path
-		if p == "/api/exec" || p == "/api/events" || p == "/api/ai/diagnose" || strings.HasSuffix(p, "/agglogs") || r.URL.Query().Get("follow") == "true" || (strings.HasSuffix(p, "/drain") && r.URL.Query().Get("stream") == "true") {
+		if p == "/api/exec" || p == "/api/ws/presence" || p == "/api/events" || p == "/api/ai/diagnose" || strings.HasSuffix(p, "/agglogs") || r.URL.Query().Get("follow") == "true" || (strings.HasSuffix(p, "/drain") && r.URL.Query().Get("stream") == "true") {
 			h.ServeHTTP(w, r)
 			return
 		}

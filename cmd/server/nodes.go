@@ -20,33 +20,38 @@ import (
 func apiNodes(w http.ResponseWriter, r *http.Request) {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.nodes == nil { je(w, "cache not ready", 503); return }
+	if cache.nodes == nil {
+		je(w, "cache not ready", 503)
+		return
+	}
 
 	type nd struct {
-		Name         string `json:"name"`
-		Ready        bool   `json:"ready"`
-		Cordoned     bool   `json:"cordoned"`
-		Nodepool     string `json:"nodepool"`
-		Age          string `json:"age"`
-		CPU          int64  `json:"allocCpuM"`
-		Mem          int64  `json:"allocMemMi"`
-		UsedCPU      int64  `json:"usedCpuM"`
-		UsedMem      int64  `json:"usedMemMi"`
-		Pods         int    `json:"pods"`
-		PodCapacity  int    `json:"podCapacity"`
-		InstanceType string `json:"instanceType"`
-		Zone         string `json:"zone"`
-		CapacityType string `json:"capacityType"`
-		Arch         string `json:"arch"`
-		Kubelet      string `json:"kubelet"`
-		Runtime      string `json:"runtime"`
-		InternalIP   string `json:"internalIp"`
-		Taints       int    `json:"taints"`
+		Name         string   `json:"name"`
+		Ready        bool     `json:"ready"`
+		Cordoned     bool     `json:"cordoned"`
+		Nodepool     string   `json:"nodepool"`
+		Age          string   `json:"age"`
+		CPU          int64    `json:"allocCpuM"`
+		Mem          int64    `json:"allocMemMi"`
+		UsedCPU      int64    `json:"usedCpuM"`
+		UsedMem      int64    `json:"usedMemMi"`
+		Pods         int      `json:"pods"`
+		PodCapacity  int      `json:"podCapacity"`
+		InstanceType string   `json:"instanceType"`
+		Zone         string   `json:"zone"`
+		CapacityType string   `json:"capacityType"`
+		Arch         string   `json:"arch"`
+		Kubelet      string   `json:"kubelet"`
+		Runtime      string   `json:"runtime"`
+		InternalIP   string   `json:"internalIp"`
+		Taints       int      `json:"taints"`
 		Conditions   []string `json:"conditions"`
 	}
 	podCount := map[string]int{}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items { podCount[p.Spec.NodeName]++ }
+		for _, p := range cache.pods {
+			podCount[p.Spec.NodeName]++
+		}
 	}
 	metricsMap := map[string][2]int64{}
 	if cache.nodeMetrics != nil {
@@ -59,32 +64,55 @@ func apiNodes(w http.ResponseWriter, r *http.Request) {
 		ready := false
 		var badConditions []string
 		for _, cond := range n.Status.Conditions {
-			if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionTrue { ready = true }
-			if cond.Type == corev1.NodeMemoryPressure && cond.Status == corev1.ConditionTrue { badConditions = append(badConditions, "MemoryPressure") }
-			if cond.Type == corev1.NodeDiskPressure && cond.Status == corev1.ConditionTrue { badConditions = append(badConditions, "DiskPressure") }
-			if cond.Type == corev1.NodePIDPressure && cond.Status == corev1.ConditionTrue { badConditions = append(badConditions, "PIDPressure") }
-			if cond.Type == corev1.NodeNetworkUnavailable && cond.Status == corev1.ConditionTrue { badConditions = append(badConditions, "NetworkUnavailable") }
+			if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionTrue {
+				ready = true
+			}
+			if cond.Type == corev1.NodeMemoryPressure && cond.Status == corev1.ConditionTrue {
+				badConditions = append(badConditions, "MemoryPressure")
+			}
+			if cond.Type == corev1.NodeDiskPressure && cond.Status == corev1.ConditionTrue {
+				badConditions = append(badConditions, "DiskPressure")
+			}
+			if cond.Type == corev1.NodePIDPressure && cond.Status == corev1.ConditionTrue {
+				badConditions = append(badConditions, "PIDPressure")
+			}
+			if cond.Type == corev1.NodeNetworkUnavailable && cond.Status == corev1.ConditionTrue {
+				badConditions = append(badConditions, "NetworkUnavailable")
+			}
 		}
 		m := metricsMap[n.Name]
 		nodepool := ""
-		if v, ok := n.Labels["karpenter.sh/nodepool"]; ok { nodepool = v }
+		if v, ok := n.Labels["karpenter.sh/nodepool"]; ok {
+			nodepool = v
+		}
 
 		instanceType := n.Labels["node.kubernetes.io/instance-type"]
-		if instanceType == "" { instanceType = n.Labels["beta.kubernetes.io/instance-type"] }
+		if instanceType == "" {
+			instanceType = n.Labels["beta.kubernetes.io/instance-type"]
+		}
 
 		zone := n.Labels["topology.kubernetes.io/zone"]
-		if zone == "" { zone = n.Labels["failure-domain.beta.kubernetes.io/zone"] }
+		if zone == "" {
+			zone = n.Labels["failure-domain.beta.kubernetes.io/zone"]
+		}
 
 		capType := n.Labels["karpenter.sh/capacity-type"]
-		if capType == "" { capType = strings.ToLower(n.Labels["eks.amazonaws.com/capacityType"]) }
+		if capType == "" {
+			capType = strings.ToLower(n.Labels["eks.amazonaws.com/capacityType"])
+		}
 
 		internalIP := ""
 		for _, a := range n.Status.Addresses {
-			if a.Type == corev1.NodeInternalIP { internalIP = a.Address; break }
+			if a.Type == corev1.NodeInternalIP {
+				internalIP = a.Address
+				break
+			}
 		}
 
 		podCap := 0
-		if pc, ok := n.Status.Allocatable["pods"]; ok { podCap = int(pc.Value()) }
+		if pc, ok := n.Status.Allocatable["pods"]; ok {
+			podCap = int(pc.Value())
+		}
 
 		si := n.Status.NodeInfo
 		kubelet := si.KubeletVersion
@@ -93,8 +121,8 @@ func apiNodes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, nd{
 			Name: n.Name, Ready: ready, Cordoned: n.Spec.Unschedulable,
 			Nodepool: nodepool,
-			Age: shortDur(time.Since(n.CreationTimestamp.Time)),
-			CPU: n.Status.Allocatable.Cpu().MilliValue(), Mem: n.Status.Allocatable.Memory().Value() / (1024 * 1024),
+			Age:      shortDur(time.Since(n.CreationTimestamp.Time)),
+			CPU:      n.Status.Allocatable.Cpu().MilliValue(), Mem: n.Status.Allocatable.Memory().Value() / (1024 * 1024),
 			UsedCPU: m[0], UsedMem: m[1],
 			Pods: podCount[n.Name], PodCapacity: podCap,
 			InstanceType: instanceType, Zone: zone, CapacityType: capType,
@@ -219,13 +247,13 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 
 		si := node.Status.NodeInfo
 		sysInfo := map[string]string{
-			"os":              si.OperatingSystem,
-			"arch":            si.Architecture,
-			"kernel":          si.KernelVersion,
+			"os":               si.OperatingSystem,
+			"arch":             si.Architecture,
+			"kernel":           si.KernelVersion,
 			"containerRuntime": si.ContainerRuntimeVersion,
-			"kubelet":         si.KubeletVersion,
-			"kubeProxy":       si.KubeProxyVersion,
-			"osImage":         si.OSImage,
+			"kubelet":          si.KubeletVersion,
+			"kubeProxy":        si.KubeProxyVersion,
+			"osImage":          si.OSImage,
 		}
 
 		labels := map[string]string{}
@@ -261,13 +289,13 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 						readyCt++
 					}
 				}
-			pods = append(pods, podSummary{
-				Name:   p.Name,
-				NS:     p.Namespace,
-				Status: podDisplayStatus(p),
-				Ready:  fmt.Sprintf("%d/%d", readyCt, totalCt),
-				Age:    shortDur(time.Since(p.CreationTimestamp.Time)),
-			})
+				pods = append(pods, podSummary{
+					Name:   p.Name,
+					NS:     p.Namespace,
+					Status: podDisplayStatus(&p),
+					Ready:  fmt.Sprintf("%d/%d", readyCt, totalCt),
+					Age:    shortDur(time.Since(p.CreationTimestamp.Time)),
+				})
 			}
 		}
 
@@ -353,28 +381,28 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		}
 
 		j(w, map[string]interface{}{
-			"name":        node.Name,
-			"status":      status,
-			"role":        role,
-			"age":         shortDur(time.Since(node.CreationTimestamp.Time)),
-			"version":     si.KubeletVersion,
-			"cordoned":    node.Spec.Unschedulable,
-			"addresses":   addresses,
-			"conditions":  conditions,
-			"taints":      taints,
-			"capacity":    capacity,
-			"allocatable": allocatable,
-			"systemInfo":  sysInfo,
-			"labels":      labels,
-			"images":      images,
-			"pods":        pods,
-			"events":      nodeEvents,
-			"usedCpuM":    usedCPU,
-			"usedMemMi":   usedMem,
-			"allocCpuM":   allocCPU,
-			"allocMemMi":  allocMem,
-			"cpuPercent":  cpuPct,
-			"memPercent":  memPct,
+			"name":          node.Name,
+			"status":        status,
+			"role":          role,
+			"age":           shortDur(time.Since(node.CreationTimestamp.Time)),
+			"version":       si.KubeletVersion,
+			"cordoned":      node.Spec.Unschedulable,
+			"addresses":     addresses,
+			"conditions":    conditions,
+			"taints":        taints,
+			"capacity":      capacity,
+			"allocatable":   allocatable,
+			"systemInfo":    sysInfo,
+			"labels":        labels,
+			"images":        images,
+			"pods":          pods,
+			"events":        nodeEvents,
+			"usedCpuM":      usedCPU,
+			"usedMemMi":     usedMem,
+			"allocCpuM":     allocCPU,
+			"allocMemMi":    allocMem,
+			"cpuPercent":    cpuPct,
+			"memPercent":    memPct,
 			"requestsCpuM":  reqCPU,
 			"requestsMemMi": reqMem,
 			"limitsCpuM":    limCPU,
@@ -421,9 +449,13 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		var pods []puPod
 		var totalCPU, totalMem int64
 		if cache.pods != nil {
-			for _, p := range cache.pods.Items {
-				if p.Spec.NodeName != name { continue }
-				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed { continue }
+			for _, p := range cache.pods {
+				if p.Spec.NodeName != name {
+					continue
+				}
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
 
 				usage := pmMap[p.Namespace+"/"+p.Name]
 				var cpuReq, cpuLim, memReq, memLim int64
@@ -436,7 +468,9 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 
 				readyCt, totalCt := 0, len(p.Spec.Containers)
 				for _, cs := range p.Status.ContainerStatuses {
-					if cs.Ready { readyCt++ }
+					if cs.Ready {
+						readyCt++
+					}
 				}
 
 				totalCPU += usage[0]
@@ -447,8 +481,8 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 					CpuReqM: cpuReq, CpuLimM: cpuLim,
 					MemReqMi: memReq, MemLimMi: memLim,
 					Status: podDisplayStatus(p),
-					Ready: fmt.Sprintf("%d/%d", readyCt, totalCt),
-					Age: shortDur(time.Since(p.CreationTimestamp.Time)),
+					Ready:  fmt.Sprintf("%d/%d", readyCt, totalCt),
+					Age:    shortDur(time.Since(p.CreationTimestamp.Time)),
 				})
 			}
 		}
@@ -456,10 +490,16 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(pods, func(i, k int) bool { return pods[i].CpuUsedM > pods[k].CpuUsedM })
 
 		cpuPct, memPct := 0, 0
-		if allocCPU > 0 { cpuPct = int(totalCPU * 100 / allocCPU) }
-		if allocMem > 0 { memPct = int(totalMem * 100 / allocMem) }
+		if allocCPU > 0 {
+			cpuPct = int(totalCPU * 100 / allocCPU)
+		}
+		if allocMem > 0 {
+			memPct = int(totalMem * 100 / allocMem)
+		}
 
-		if pods == nil { pods = []puPod{} }
+		if pods == nil {
+			pods = []puPod{}
+		}
 		j(w, map[string]interface{}{
 			"node":     map[string]int64{"allocCpuM": allocCPU, "allocMemMi": allocMem},
 			"pods":     pods,
@@ -472,7 +512,10 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		c, cancel := ctx()
 		defer cancel()
 		pods, err := clientset.CoreV1().Pods("").List(c, metav1.ListOptions{FieldSelector: "spec.nodeName=" + name})
-		if err != nil { jk8s(w, err); return }
+		if err != nil {
+			jk8s(w, err)
+			return
+		}
 
 		cache.mu.RLock()
 		pdbList := cache.pdbs
@@ -516,7 +559,10 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 			}
 			hasLocal := false
 			for _, v := range p.Spec.Volumes {
-				if v.EmptyDir != nil { hasLocal = true; break }
+				if v.EmptyDir != nil {
+					hasLocal = true
+					break
+				}
 			}
 			if hasLocal && cat == "normal" {
 				cat = "localStorage"
@@ -529,11 +575,18 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 			pdbBlocked := false
 			if pdbList != nil {
 				for _, pdb := range pdbList.Items {
-					if pdb.Namespace != p.Namespace { continue }
-					if pdb.Spec.Selector == nil || len(pdb.Spec.Selector.MatchLabels) == 0 { continue }
+					if pdb.Namespace != p.Namespace {
+						continue
+					}
+					if pdb.Spec.Selector == nil || len(pdb.Spec.Selector.MatchLabels) == 0 {
+						continue
+					}
 					match := true
 					for k, v := range pdb.Spec.Selector.MatchLabels {
-						if p.Labels[k] != v { match = false; break }
+						if p.Labels[k] != v {
+							match = false
+							break
+						}
 					}
 					if match {
 						pdbName = pdb.Name
@@ -554,10 +607,15 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 				summary["evictable"]++
 			}
 			entry := podEntry{Name: p.Name, Namespace: p.Namespace, Owner: ownerName, OwnerKind: ownerKind, Category: cat, Warning: warn}
-			if pdbName != "" { entry.PDBName = pdbName; entry.PDBAllow = pdbAllow }
+			if pdbName != "" {
+				entry.PDBName = pdbName
+				entry.PDBAllow = pdbAllow
+			}
 			entries = append(entries, entry)
 		}
-		if entries == nil { entries = []podEntry{} }
+		if entries == nil {
+			entries = []podEntry{}
+		}
 		j(w, map[string]interface{}{"pods": entries, "summary": summary})
 		return
 	}
@@ -567,7 +625,9 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		je(w, "POST only", 405)
 		return
 	}
-	if !requireAdmin(w, r) { return }
+	if !requireAdmin(w, r) {
+		return
+	}
 	c, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -578,7 +638,7 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 			jk8s(w, err)
 			return
 		}
-		go cache.refresh()
+		triggerRebuild()
 		j(w, map[string]string{"ok": "cordoned"})
 	case "uncordon":
 		err := patchUnschedulable(c, name, false)
@@ -586,7 +646,7 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 			jk8s(w, err)
 			return
 		}
-		go cache.refresh()
+		triggerRebuild()
 		j(w, map[string]string{"ok": "uncordoned"})
 	case "drain":
 		stream := r.URL.Query().Get("stream") == "true"
@@ -598,16 +658,28 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if stream {
 			flusher, ok := w.(http.Flusher)
-			if !ok { je(w, "streaming not supported", 500); return }
+			if !ok {
+				je(w, "streaming not supported", 500)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Connection", "keep-alive")
 			evicted, failed := 0, 0
 			for _, p := range pods.Items {
-				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed { continue }
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
 				isDaemon := false
-				for _, ref := range p.OwnerReferences { if ref.Kind == "DaemonSet" { isDaemon = true; break } }
-				if isDaemon { continue }
+				for _, ref := range p.OwnerReferences {
+					if ref.Kind == "DaemonSet" {
+						isDaemon = true
+						break
+					}
+				}
+				if isDaemon {
+					continue
+				}
 				ev := &policyv1.Eviction{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
 				fmt.Fprintf(w, "data: {\"pod\":%q,\"ns\":%q,\"status\":\"evicting\"}\n\n", p.Name, p.Namespace)
 				flusher.Flush()
@@ -623,17 +695,25 @@ func apiNodeAction(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(w, "data: {\"done\":true,\"evicted\":%d,\"failed\":%d}\n\n", evicted, failed)
 			flusher.Flush()
-			go cache.refresh()
+			triggerRebuild()
 		} else {
 			evicted := 0
 			for _, p := range pods.Items {
 				skip := false
-				for _, ref := range p.OwnerReferences { if ref.Kind == "DaemonSet" { skip = true } }
-				if skip { continue }
+				for _, ref := range p.OwnerReferences {
+					if ref.Kind == "DaemonSet" {
+						skip = true
+					}
+				}
+				if skip {
+					continue
+				}
 				ev := &policyv1.Eviction{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
-				if err := clientset.CoreV1().Pods(p.Namespace).EvictV1(c, ev); err == nil { evicted++ }
+				if err := clientset.CoreV1().Pods(p.Namespace).EvictV1(c, ev); err == nil {
+					evicted++
+				}
 			}
-			go cache.refresh()
+			triggerRebuild()
 			j(w, map[string]interface{}{"ok": "drained", "evicted": evicted})
 		}
 	default:

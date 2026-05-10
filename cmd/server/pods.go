@@ -22,7 +22,10 @@ func apiPods(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.pods == nil { je(w, "cache not ready", 503); return }
+	if cache.pods == nil {
+		je(w, "cache not ready", 503)
+		return
+	}
 
 	podMetricsMap := cache.podMetricsMap
 
@@ -54,8 +57,10 @@ func apiPods(w http.ResponseWriter, r *http.Request) {
 		ContStates []ctState         `json:"containerStates,omitempty"`
 	}
 	out := make([]pd, 0)
-	for _, p := range cache.pods.Items {
-		if ns != "" && p.Namespace != ns { continue }
+	for _, p := range cache.pods {
+		if ns != "" && p.Namespace != ns {
+			continue
+		}
 		restarts := int32(0)
 		readyCt, totalCt := 0, len(p.Spec.Containers)
 		var cpuReq, cpuLim, memReq, memLim int64
@@ -67,7 +72,9 @@ func apiPods(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, cs := range p.Status.ContainerStatuses {
 			restarts += cs.RestartCount
-			if cs.Ready { readyCt++ }
+			if cs.Ready {
+				readyCt++
+			}
 		}
 		usage := podMetricsMap[p.Namespace+"/"+p.Name]
 		cpuSizing, memSizing := "unknown", "unknown"
@@ -92,7 +99,9 @@ func apiPods(w http.ResponseWriter, r *http.Request) {
 		curated := map[string]string{}
 		interestingKeys := []string{"app", "app.kubernetes.io/name", "app.kubernetes.io/version", "version", "app.kubernetes.io/component"}
 		for _, k := range interestingKeys {
-			if v, ok := p.Labels[k]; ok { curated[k] = v }
+			if v, ok := p.Labels[k]; ok {
+				curated[k] = v
+			}
 		}
 		var cstates []ctState
 		allRunning := true
@@ -250,27 +259,27 @@ func apiPodDetail(w http.ResponseWriter, r *http.Request) {
 			FailureThreshold int32  `json:"failureThreshold,omitempty"`
 		}
 		type containerInfo struct {
-			Name                  string     `json:"name"`
-			Image                 string     `json:"image"`
-			Ready                 bool       `json:"ready"`
-			State                 string     `json:"state"`
-			Reason                string     `json:"reason"`
-			Message               string     `json:"message"`
-			Restarts              int32      `json:"restarts"`
-			Started               bool       `json:"started"`
-			CpuReq                int64      `json:"cpuReqM"`
-			CpuLim                int64      `json:"cpuLimM"`
-			CpuUsed               int64      `json:"cpuUsedM"`
-			MemReq                int64      `json:"memReqMi"`
-			MemLim                int64      `json:"memLimMi"`
-			MemUsed               int64      `json:"memUsedMi"`
-			LastTermReason        string     `json:"lastTermReason,omitempty"`
-			LastTermExitCode      *int32     `json:"lastTermExitCode,omitempty"`
-			LastTermMessage       string     `json:"lastTermMessage,omitempty"`
-			LastTermAt            string     `json:"lastTermAt,omitempty"`
-			LivenessProbe         *probeInfo `json:"livenessProbe,omitempty"`
-			ReadinessProbe        *probeInfo `json:"readinessProbe,omitempty"`
-			StartupProbe          *probeInfo `json:"startupProbe,omitempty"`
+			Name             string     `json:"name"`
+			Image            string     `json:"image"`
+			Ready            bool       `json:"ready"`
+			State            string     `json:"state"`
+			Reason           string     `json:"reason"`
+			Message          string     `json:"message"`
+			Restarts         int32      `json:"restarts"`
+			Started          bool       `json:"started"`
+			CpuReq           int64      `json:"cpuReqM"`
+			CpuLim           int64      `json:"cpuLimM"`
+			CpuUsed          int64      `json:"cpuUsedM"`
+			MemReq           int64      `json:"memReqMi"`
+			MemLim           int64      `json:"memLimMi"`
+			MemUsed          int64      `json:"memUsedMi"`
+			LastTermReason   string     `json:"lastTermReason,omitempty"`
+			LastTermExitCode *int32     `json:"lastTermExitCode,omitempty"`
+			LastTermMessage  string     `json:"lastTermMessage,omitempty"`
+			LastTermAt       string     `json:"lastTermAt,omitempty"`
+			LivenessProbe    *probeInfo `json:"livenessProbe,omitempty"`
+			ReadinessProbe   *probeInfo `json:"readinessProbe,omitempty"`
+			StartupProbe     *probeInfo `json:"startupProbe,omitempty"`
 		}
 
 		containerMetrics := map[string][2]int64{}
@@ -300,7 +309,9 @@ func apiPodDetail(w http.ResponseWriter, r *http.Request) {
 		}
 
 		makeProbe := func(p *corev1.Probe) *probeInfo {
-			if p == nil { return nil }
+			if p == nil {
+				return nil
+			}
 			pi := &probeInfo{PeriodSeconds: p.PeriodSeconds, FailureThreshold: p.FailureThreshold}
 			if p.HTTPGet != nil {
 				pi.Type = "httpGet"
@@ -321,12 +332,12 @@ func apiPodDetail(w http.ResponseWriter, r *http.Request) {
 
 		populateCI := func(ct corev1.Container, statusMap map[string]corev1.ContainerStatus) containerInfo {
 			ci := containerInfo{
-				Name:   ct.Name,
-				Image:  shortImage(ct.Image),
-				CpuReq: ct.Resources.Requests.Cpu().MilliValue(),
-				CpuLim: ct.Resources.Limits.Cpu().MilliValue(),
-				MemReq: ct.Resources.Requests.Memory().Value() / (1024 * 1024),
-				MemLim: ct.Resources.Limits.Memory().Value() / (1024 * 1024),
+				Name:           ct.Name,
+				Image:          shortImage(ct.Image),
+				CpuReq:         ct.Resources.Requests.Cpu().MilliValue(),
+				CpuLim:         ct.Resources.Limits.Cpu().MilliValue(),
+				MemReq:         ct.Resources.Requests.Memory().Value() / (1024 * 1024),
+				MemLim:         ct.Resources.Limits.Memory().Value() / (1024 * 1024),
 				LivenessProbe:  makeProbe(ct.LivenessProbe),
 				ReadinessProbe: makeProbe(ct.ReadinessProbe),
 				StartupProbe:   makeProbe(ct.StartupProbe),
@@ -417,7 +428,7 @@ func apiPodDetail(w http.ResponseWriter, r *http.Request) {
 			"name":           pod.Name,
 			"namespace":      pod.Namespace,
 			"node":           pod.Spec.NodeName,
-			"status":         podDisplayStatus(*pod),
+			"status":         podDisplayStatus(pod),
 			"ip":             pod.Status.PodIP,
 			"qos":            string(pod.Status.QOSClass),
 			"age":            shortDur(time.Since(pod.CreationTimestamp.Time)),
@@ -432,13 +443,15 @@ func apiPodDetail(w http.ResponseWriter, r *http.Request) {
 			je(w, "POST only", 405)
 			return
 		}
-		if !requireAdmin(w, r) { return }
+		if !requireAdmin(w, r) {
+			return
+		}
 		err := clientset.CoreV1().Pods(ns).Delete(c, name, metav1.DeleteOptions{})
 		if err != nil {
 			jk8s(w, err)
 			return
 		}
-		go cache.refresh()
+		triggerRebuild()
 		if sd, ok := r.Context().Value(userCtxKey).(*sessionData); ok && sd != nil {
 			auditRecord(sd.Email, sd.Role, "pod.delete", fmt.Sprintf("Pod %s/%s", ns, name), "", clientIP(r))
 		}
@@ -660,7 +673,7 @@ func restartTimelineFromFallback(ns, pod, podRegex string, since time.Time) []re
 
 	// 1. Filter cache.events for restart-related Warning events
 	if cache.events != nil {
-		for _, e := range cache.events.Items {
+		for _, e := range cache.events {
 			if e.Namespace != ns {
 				continue
 			}
@@ -715,8 +728,7 @@ func restartTimelineFromFallback(ns, pod, podRegex string, since time.Time) []re
 
 	// 2. Read containerStatuses[].lastTerminationState from cache.pods
 	if cache.pods != nil {
-		for i := range cache.pods.Items {
-			p := &cache.pods.Items[i]
+		for _, p := range cache.pods {
 			if p.Namespace != ns {
 				continue
 			}

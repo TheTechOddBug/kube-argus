@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -16,8 +17,24 @@ import (
 
 // ─── Pod Shell (WebSocket exec) ──────────────────────────────────────
 
+// wsCheckOrigin only accepts WS handshakes whose Origin header matches the
+// dashboard's own host. Browsers send cookies on WS handshakes and CORS does
+// not protect them, so without this a malicious cross-origin page could open a
+// WebSocket using the user's session cookie.
+func wsCheckOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
+}
+
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: wsCheckOrigin,
 }
 
 type wsTerminal struct {
@@ -43,7 +60,9 @@ func apiExec(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	name := r.URL.Query().Get("pod")
 	ownerKind, ownerName := resolvePodOwner(ns, name)
-	if !requireAdminOrJIT(w, r, ns, ownerKind, ownerName) { return }
+	if !requireAdminOrJIT(w, r, ns, ownerKind, ownerName) {
+		return
+	}
 	container := r.URL.Query().Get("container")
 	if ns == "" || name == "" {
 		je(w, "namespace and pod required", 400)

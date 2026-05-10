@@ -26,7 +26,7 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 	running, pending, failed, succeeded := 0, 0, 0, 0
 	podCountByNode := map[string]int{}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items {
+		for _, p := range cache.pods {
 			switch p.Status.Phase {
 			case corev1.PodRunning:
 				running++
@@ -61,11 +61,17 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		if ready { readyNodes++ }
+		if ready {
+			readyNodes++
+		}
 
 		status := "NotReady"
-		if ready { status = "Ready" }
-		if n.Spec.Unschedulable { status += ",SchedulingDisabled" }
+		if ready {
+			status = "Ready"
+		}
+		if n.Spec.Unschedulable {
+			status += ",SchedulingDisabled"
+		}
 
 		role := "<none>"
 		for k := range n.Labels {
@@ -81,7 +87,10 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		internalIP := ""
 		for _, addr := range n.Status.Addresses {
-			if addr.Type == corev1.NodeInternalIP { internalIP = addr.Address; break }
+			if addr.Type == corev1.NodeInternalIP {
+				internalIP = addr.Address
+				break
+			}
 		}
 
 		allocCPU := n.Status.Allocatable.Cpu().MilliValue()
@@ -90,8 +99,12 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 		cpuPct, memPct := 0, 0
 		if m, ok := nodeMetricsMap[n.Name]; ok {
 			usedCPU, usedMem = m["cpu"], m["mem"]
-			if allocCPU > 0 { cpuPct = int(usedCPU * 100 / allocCPU) }
-			if allocMem > 0 { memPct = int(usedMem * 100 / allocMem) }
+			if allocCPU > 0 {
+				cpuPct = int(usedCPU * 100 / allocCPU)
+			}
+			if allocMem > 0 {
+				memPct = int(usedMem * 100 / allocMem)
+			}
 		}
 		instanceType := n.Labels["node.kubernetes.io/instance-type"]
 		if instanceType == "" {
@@ -102,7 +115,7 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 			"nodepool": nodepool, "instanceType": instanceType,
 			"age": shortDur(time.Since(n.CreationTimestamp.Time)), "ageSec": int64(time.Since(n.CreationTimestamp.Time).Seconds()),
 			"version": n.Status.NodeInfo.KubeletVersion, "internalIP": internalIP,
-			"cordoned": n.Spec.Unschedulable,
+			"cordoned":  n.Spec.Unschedulable,
 			"allocCpuM": allocCPU, "allocMemMi": allocMem,
 			"usedCpuM": usedCPU, "usedMemMi": usedMem,
 			"cpuPercent": cpuPct, "memPercent": memPct,
@@ -115,8 +128,12 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 		totalDeploys = len(cache.deployments.Items)
 		for _, d := range cache.deployments.Items {
 			desired := int32(1)
-			if d.Spec.Replicas != nil { desired = *d.Spec.Replicas }
-			if d.Status.ReadyReplicas >= desired { readyDeploys++ }
+			if d.Spec.Replicas != nil {
+				desired = *d.Spec.Replicas
+			}
+			if d.Status.ReadyReplicas >= desired {
+				readyDeploys++
+			}
 		}
 	}
 
@@ -133,31 +150,56 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nsCount := 0
-	if cache.namespaces != nil { nsCount = len(cache.namespaces.Items) }
+	if cache.namespaces != nil {
+		nsCount = len(cache.namespaces.Items)
+	}
 	totalPods := 0
-	if cache.pods != nil { totalPods = len(cache.pods.Items) }
+	if cache.pods != nil {
+		totalPods = len(cache.pods)
+	}
 	svcCount := 0
-	if cache.services != nil { svcCount = len(cache.services.Items) }
+	if cache.services != nil {
+		svcCount = len(cache.services.Items)
+	}
 	ingCount := 0
-	if cache.ingresses != nil { ingCount = len(cache.ingresses.Items) }
+	if cache.ingresses != nil {
+		ingCount = len(cache.ingresses.Items)
+	}
 	stsCount := 0
-	if cache.statefulsets != nil { stsCount = len(cache.statefulsets.Items) }
+	if cache.statefulsets != nil {
+		stsCount = len(cache.statefulsets.Items)
+	}
 	dsCount := 0
-	if cache.daemonsets != nil { dsCount = len(cache.daemonsets.Items) }
+	if cache.daemonsets != nil {
+		dsCount = len(cache.daemonsets.Items)
+	}
 	jobCount := 0
-	if cache.jobs != nil { jobCount = len(cache.jobs.Items) }
+	if cache.jobs != nil {
+		jobCount = len(cache.jobs.Items)
+	}
 	cjCount := 0
-	if cache.cronjobs != nil { cjCount = len(cache.cronjobs.Items) }
+	if cache.cronjobs != nil {
+		cjCount = len(cache.cronjobs.Items)
+	}
 
 	nsPodCounts := map[string]int{}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items { nsPodCounts[p.Namespace]++ }
+		for _, p := range cache.pods {
+			nsPodCounts[p.Namespace]++
+		}
 	}
-	type nsPod struct { NS string `json:"ns"`; Pods int `json:"pods"` }
+	type nsPod struct {
+		NS   string `json:"ns"`
+		Pods int    `json:"pods"`
+	}
 	topNS := make([]nsPod, 0, len(nsPodCounts))
-	for ns, c := range nsPodCounts { topNS = append(topNS, nsPod{ns, c}) }
+	for ns, c := range nsPodCounts {
+		topNS = append(topNS, nsPod{ns, c})
+	}
 	sort.Slice(topNS, func(i, j int) bool { return topNS[i].Pods > topNS[j].Pods })
-	if len(topNS) > 8 { topNS = topNS[:8] }
+	if len(topNS) > 8 {
+		topNS = topNS[:8]
+	}
 
 	type miniEvt struct {
 		Type    string `json:"type"`
@@ -170,15 +212,23 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 	recentEvents := make([]miniEvt, 0)
 	if cache.events != nil {
 		cutoff := time.Now().Add(-30 * time.Minute)
-		for _, e := range cache.events.Items {
-			if e.Type != "Warning" { continue }
+		for _, e := range cache.events {
+			if e.Type != "Warning" {
+				continue
+			}
 			ts := e.LastTimestamp.Time
-			if ts.IsZero() { ts = e.CreationTimestamp.Time }
-			if ts.Before(cutoff) { continue }
+			if ts.IsZero() {
+				ts = e.CreationTimestamp.Time
+			}
+			if ts.Before(cutoff) {
+				continue
+			}
 			recentEvents = append(recentEvents, miniEvt{e.Type, e.Reason, e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name, e.Message, shortDur(time.Since(ts)), e.Namespace})
 		}
 		sort.Slice(recentEvents, func(i, j int) bool { return recentEvents[i].Age < recentEvents[j].Age })
-		if len(recentEvents) > 15 { recentEvents = recentEvents[:15] }
+		if len(recentEvents) > 15 {
+			recentEvents = recentEvents[:15]
+		}
 	}
 
 	jGz(w, r, map[string]interface{}{
@@ -197,6 +247,6 @@ func apiOverview(w http.ResponseWriter, r *http.Request) {
 			"daemonsets": dsCount, "jobs": jobCount, "cronjobs": cjCount,
 		},
 		"topNamespaces": topNS,
-		"warnings": recentEvents,
+		"warnings":      recentEvents,
 	})
 }

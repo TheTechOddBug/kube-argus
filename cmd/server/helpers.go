@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,11 +15,15 @@ import (
 func apiNamespaces(w http.ResponseWriter, r *http.Request) {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.namespaces == nil { j(w, []string{}); return }
+	if cache.namespaces == nil {
+		j(w, []string{})
+		return
+	}
 	out := make([]string, 0, len(cache.namespaces.Items))
 	for _, n := range cache.namespaces.Items {
 		out = append(out, n.Name)
 	}
+	sort.Strings(out)
 	j(w, out)
 }
 
@@ -35,7 +40,7 @@ func shortDur(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-func podDisplayStatus(p corev1.Pod) string {
+func podDisplayStatus(p *corev1.Pod) string {
 	reason := string(p.Status.Phase)
 	if p.Status.Reason != "" {
 		reason = p.Status.Reason
@@ -45,7 +50,9 @@ func podDisplayStatus(p corev1.Pod) string {
 			continue
 		}
 		if cs.State.Terminated != nil {
-			if cs.State.Terminated.Reason != "" { return "Init:" + cs.State.Terminated.Reason }
+			if cs.State.Terminated.Reason != "" {
+				return "Init:" + cs.State.Terminated.Reason
+			}
 			return fmt.Sprintf("Init:ExitCode:%d", cs.State.Terminated.ExitCode)
 		}
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
@@ -61,7 +68,9 @@ func podDisplayStatus(p corev1.Pod) string {
 			reason = fmt.Sprintf("ExitCode:%d", cs.State.Terminated.ExitCode)
 		}
 	}
-	if p.DeletionTimestamp != nil { reason = "Terminating" }
+	if p.DeletionTimestamp != nil {
+		reason = "Terminating"
+	}
 	return reason
 }
 

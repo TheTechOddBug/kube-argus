@@ -13,6 +13,19 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('ErrorBoundary caught:', error, info.componentStack)
+    // After a new deployment, old chunk hashes no longer exist on the server.
+    // Auto-reload once to pick up the new index.html with correct chunk refs.
+    if (error.message?.includes('Failed to fetch dynamically imported module') ||
+        error.message?.includes('Loading chunk') ||
+        error.message?.includes('Loading CSS chunk')) {
+      const key = 'chunk_reload'
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1')
+        window.location.reload()
+        return
+      }
+      sessionStorage.removeItem(key)
+    }
   }
 
   render() {
@@ -22,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="text-sm font-semibold text-red-400">Something went wrong</p>
           <p className="max-w-md text-xs text-gray-500">{this.state.error?.message}</p>
-          <button onClick={() => this.setState({ hasError: false, error: null })} className="mt-2 rounded-lg border border-hull-600 bg-hull-800 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-hull-700">
+          <button onClick={() => window.location.reload()} className="mt-2 rounded-lg border border-hull-600 bg-hull-800 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-hull-700">
             Try again
           </button>
         </div>

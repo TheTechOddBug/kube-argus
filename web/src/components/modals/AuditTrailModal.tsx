@@ -29,20 +29,37 @@ export const AUDIT_ACTION_STYLE: Record<string, { bg: string; text: string }> = 
   'jit.expired': { bg: 'bg-gray-700/30 border-gray-600/30', text: 'text-gray-400' },
 }
 
-export function AuditTrailModal({ onClose }: { onClose: () => void }) {
+function dedupKey(e: AuditEvent) {
+  return `${new Date(e.time).getTime()}|${e.actor}|${e.action}|${e.resource}`
+}
+
+export function AuditTrailModal({ deltas = [], onClose }: { deltas?: AuditEvent[]; onClose: () => void }) {
   const [events, setEvents] = useState<AuditEvent[]>([])
   const [filter, setFilter] = useState<string>('all')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   const fetchAudit = useCallback(() => {
     fetch('/api/audit?limit=500')
       .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json() })
-      .then(d => { if (Array.isArray(d)) setEvents(d); setLoading(false) })
-      .catch(() => setLoading(false))
+      .then(d => { if (Array.isArray(d)) setEvents(d); setError(null); setLoading(false) })
+      .catch(e => { setError(e.message); setLoading(false) })
   }, [])
 
   useEffect(() => { fetchAudit() }, [fetchAudit])
-  useEffect(() => { const iv = setInterval(fetchAudit, 30000); return () => clearInterval(iv) }, [fetchAudit])
+  // 60s safety-net poll in case the WS misses anything; live updates come via deltas.
+  useEffect(() => { const iv = setInterval(fetchAudit, 60000); return () => clearInterval(iv) }, [fetchAudit])
+
+  // Merge incoming WS deltas (newest first) into the local list, deduplicated.
+  useEffect(() => {
+    if (!deltas.length) return
+    setEvents(prev => {
+      const seen = new Set(prev.map(dedupKey))
+      const incoming = deltas.filter(d => !seen.has(dedupKey(d)))
+      if (incoming.length === 0) return prev
+      return [...incoming, ...prev]
+    })
+  }, [deltas])
 
   const filtered = filter === 'all' ? events
     : filter === 'logins' ? events.filter(e => e.action === 'login' || e.action === 'logout')
@@ -82,6 +99,11 @@ export function AuditTrailModal({ onClose }: { onClose: () => void }) {
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-12"><Spinner /></div>
+          ) : error ? (
+            <div className="text-center py-12 px-5 space-y-2">
+              <p className="text-neon-red text-xs">{error}</p>
+              <button onClick={fetchAudit} className="text-[10px] text-gray-500 hover:text-white transition-colors">Retry</button>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-gray-600 text-xs">No audit events recorded yet</div>
           ) : (

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	autov2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	autov2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -24,17 +24,17 @@ func apiPDBs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type pdbInfo struct {
-		Name               string `json:"name"`
-		Namespace          string `json:"namespace"`
-		MinAvailable       string `json:"minAvailable"`
-		MaxUnavailable     string `json:"maxUnavailable"`
-		CurrentHealthy     int32  `json:"currentHealthy"`
-		DesiredHealthy     int32  `json:"desiredHealthy"`
-		DisruptionsAllowed int32  `json:"disruptionsAllowed"`
-		ExpectedPods       int32  `json:"expectedPods"`
-		Status             string `json:"status"`
+		Name               string            `json:"name"`
+		Namespace          string            `json:"namespace"`
+		MinAvailable       string            `json:"minAvailable"`
+		MaxUnavailable     string            `json:"maxUnavailable"`
+		CurrentHealthy     int32             `json:"currentHealthy"`
+		DesiredHealthy     int32             `json:"desiredHealthy"`
+		DisruptionsAllowed int32             `json:"disruptionsAllowed"`
+		ExpectedPods       int32             `json:"expectedPods"`
+		Status             string            `json:"status"`
 		MatchLabels        map[string]string `json:"matchLabels"`
-		Age                string `json:"age"`
+		Age                string            `json:"age"`
 	}
 	out := make([]pdbInfo, 0, len(cache.pdbs.Items))
 	for _, p := range cache.pdbs.Items {
@@ -102,19 +102,21 @@ func apiCronJobHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type jobRun struct {
-		Name       string  `json:"name"`
-		StartTime  *string `json:"startTime"`
-		EndTime    *string `json:"endTime"`
-		DurationS  float64 `json:"durationS"`
-		Status     string  `json:"status"`
-		Succeeded  int32   `json:"succeeded"`
-		Failed     int32   `json:"failed"`
-		Active     int32   `json:"active"`
+		Name      string  `json:"name"`
+		StartTime *string `json:"startTime"`
+		EndTime   *string `json:"endTime"`
+		DurationS float64 `json:"durationS"`
+		Status    string  `json:"status"`
+		Succeeded int32   `json:"succeeded"`
+		Failed    int32   `json:"failed"`
+		Active    int32   `json:"active"`
 	}
 	var runs []jobRun
 	if cache.jobs != nil {
 		for _, job := range cache.jobs.Items {
-			if job.Namespace != ns { continue }
+			if job.Namespace != ns {
+				continue
+			}
 			owned := false
 			for _, ref := range job.OwnerReferences {
 				if ref.Kind == "CronJob" && ref.Name == name {
@@ -122,7 +124,9 @@ func apiCronJobHistory(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			if !owned { continue }
+			if !owned {
+				continue
+			}
 			run := jobRun{
 				Name:      job.Name,
 				Succeeded: job.Status.Succeeded,
@@ -153,8 +157,12 @@ func apiCronJobHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].StartTime == nil { return false }
-		if runs[j].StartTime == nil { return true }
+		if runs[i].StartTime == nil {
+			return false
+		}
+		if runs[j].StartTime == nil {
+			return true
+		}
 		return *runs[i].StartTime > *runs[j].StartTime
 	})
 
@@ -305,10 +313,14 @@ func apiNamespaceCosts(w http.ResponseWriter, r *http.Request) {
 		memReq float64
 	}
 	nodeNS := map[string]map[string]*nsCost{}
-	for _, p := range pods.Items {
-		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed { continue }
+	for _, p := range pods {
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
 		nn := p.Spec.NodeName
-		if nn == "" { continue }
+		if nn == "" {
+			continue
+		}
 		if _, ok := nodeNS[nn]; !ok {
 			nodeNS[nn] = map[string]*nsCost{}
 		}
@@ -329,13 +341,19 @@ func apiNamespaceCosts(w http.ResponseWriter, r *http.Request) {
 			totalCPUOnNode += c.cpuReq
 			totalMemOnNode += c.memReq
 		}
-		if totalCPUOnNode == 0 && totalMemOnNode == 0 { continue }
+		if totalCPUOnNode == 0 && totalMemOnNode == 0 {
+			continue
+		}
 		hourly := nodeCost[nn]
 		for nsName, c := range nsMap {
 			cpuShare := 0.0
 			memShare := 0.0
-			if totalCPUOnNode > 0 { cpuShare = c.cpuReq / totalCPUOnNode }
-			if totalMemOnNode > 0 { memShare = c.memReq / totalMemOnNode }
+			if totalCPUOnNode > 0 {
+				cpuShare = c.cpuReq / totalCPUOnNode
+			}
+			if totalMemOnNode > 0 {
+				memShare = c.memReq / totalMemOnNode
+			}
 			share := (cpuShare + memShare) / 2
 			nsTotals[nsName] += hourly * share
 		}
@@ -343,7 +361,7 @@ func apiNamespaceCosts(w http.ResponseWriter, r *http.Request) {
 
 	type nsEntry struct {
 		Namespace   string  `json:"namespace"`
-		HourlyCost float64 `json:"hourlyCost"`
+		HourlyCost  float64 `json:"hourlyCost"`
 		MonthlyCost float64 `json:"monthlyCost"`
 	}
 	nsOut := make([]nsEntry, 0, len(nsTotals))
@@ -360,14 +378,16 @@ func apiNamespaceCosts(w http.ResponseWriter, r *http.Request) {
 	npNodes := map[string]int{}
 	for _, n := range nodes.Items {
 		np := n.Labels["karpenter.sh/nodepool"]
-		if np == "" { np = "default" }
+		if np == "" {
+			np = "default"
+		}
 		npTotals[np] += nodeCost[n.Name]
 		npNodes[np]++
 	}
 	type npEntry struct {
 		Nodepool    string  `json:"nodepool"`
 		Nodes       int     `json:"nodes"`
-		HourlyCost float64 `json:"hourlyCost"`
+		HourlyCost  float64 `json:"hourlyCost"`
 		MonthlyCost float64 `json:"monthlyCost"`
 	}
 	npOut := make([]npEntry, 0, len(npTotals))
@@ -411,22 +431,32 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 	defer cache.mu.RUnlock()
 
 	// Build node metadata maps
-	nodeCapMap := map[string]string{}   // node -> "spot" / "on-demand" / ""
-	nodePoolMap := map[string]string{}  // node -> nodepool
-	nodeInstMap := map[string]string{}  // node -> instance type
-	nodeZoneMap := map[string]string{}  // node -> zone
+	nodeCapMap := map[string]string{}  // node -> "spot" / "on-demand" / ""
+	nodePoolMap := map[string]string{} // node -> nodepool
+	nodeInstMap := map[string]string{} // node -> instance type
+	nodeZoneMap := map[string]string{} // node -> zone
 	if cache.nodes != nil {
 		for _, n := range cache.nodes.Items {
 			cap := n.Labels["karpenter.sh/capacity-type"]
-			if cap == "" { cap = strings.ToLower(n.Labels["eks.amazonaws.com/capacityType"]) }
-			if cap == "" { cap = "unknown" }
+			if cap == "" {
+				cap = strings.ToLower(n.Labels["eks.amazonaws.com/capacityType"])
+			}
+			if cap == "" {
+				cap = "unknown"
+			}
 			nodeCapMap[n.Name] = cap
-			if v := n.Labels["karpenter.sh/nodepool"]; v != "" { nodePoolMap[n.Name] = v }
+			if v := n.Labels["karpenter.sh/nodepool"]; v != "" {
+				nodePoolMap[n.Name] = v
+			}
 			inst := n.Labels["node.kubernetes.io/instance-type"]
-			if inst == "" { inst = n.Labels["beta.kubernetes.io/instance-type"] }
+			if inst == "" {
+				inst = n.Labels["beta.kubernetes.io/instance-type"]
+			}
 			nodeInstMap[n.Name] = inst
 			zone := n.Labels["topology.kubernetes.io/zone"]
-			if zone == "" { zone = n.Labels["failure-domain.beta.kubernetes.io/zone"] }
+			if zone == "" {
+				zone = n.Labels["failure-domain.beta.kubernetes.io/zone"]
+			}
 			nodeZoneMap[n.Name] = zone
 		}
 	}
@@ -434,8 +464,10 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 	// Count pods per node for affected-pods count
 	nodePodCount := map[string]int{}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items {
-			if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed { continue }
+		for _, p := range cache.pods {
+			if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+				continue
+			}
 			nodePodCount[p.Spec.NodeName]++
 		}
 	}
@@ -449,7 +481,9 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 
 	activeNodes := map[string]bool{}
 	if cache.nodes != nil {
-		for _, n := range cache.nodes.Items { activeNodes[n.Name] = true }
+		for _, n := range cache.nodes.Items {
+			activeNodes[n.Name] = true
+		}
 	}
 
 	type spotEvt struct {
@@ -466,14 +500,24 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 	}
 	var events []spotEvt
 	if cache.events != nil {
-		for _, e := range cache.events.Items {
-			if !spotReasons[e.Reason] { continue }
-			if e.InvolvedObject.Kind != "Node" && e.InvolvedObject.Kind != "Machine" { continue }
+		for _, e := range cache.events {
+			if !spotReasons[e.Reason] {
+				continue
+			}
+			if e.InvolvedObject.Kind != "Node" && e.InvolvedObject.Kind != "Machine" {
+				continue
+			}
 			nodeName := e.InvolvedObject.Name
-			if !activeNodes[nodeName] { continue }
+			if !activeNodes[nodeName] {
+				continue
+			}
 			ts := e.LastTimestamp.Time
-			if ts.IsZero() { ts = e.EventTime.Time }
-			if ts.IsZero() { ts = e.CreationTimestamp.Time }
+			if ts.IsZero() {
+				ts = e.EventTime.Time
+			}
+			if ts.IsZero() {
+				ts = e.CreationTimestamp.Time
+			}
 			events = append(events, spotEvt{
 				Reason: e.Reason, Node: nodeName,
 				Nodepool: nodePoolMap[nodeName], InstanceType: nodeInstMap[nodeName],
@@ -484,7 +528,9 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(events, func(i, k int) bool { return events[i].Timestamp > events[k].Timestamp })
-	if events == nil { events = []spotEvt{} }
+	if events == nil {
+		events = []spotEvt{}
+	}
 
 	// --- Workload Resilience Score ---
 	type resEntry struct {
@@ -504,7 +550,9 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 
 	labelsMatch := func(selector map[string]string, podLabels map[string]string) bool {
 		for k, v := range selector {
-			if podLabels[k] != v { return false }
+			if podLabels[k] != v {
+				return false
+			}
 		}
 		return true
 	}
@@ -519,72 +567,132 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 	var workloads []wlMeta
 	if cache.deployments != nil {
 		for _, d := range cache.deployments.Items {
-			if nsFilter != "" && d.Namespace != nsFilter { continue }
-			r := 1; if d.Spec.Replicas != nil { r = int(*d.Spec.Replicas) }
-			sel := map[string]string{}; if d.Spec.Selector != nil { sel = d.Spec.Selector.MatchLabels }
+			if nsFilter != "" && d.Namespace != nsFilter {
+				continue
+			}
+			r := 1
+			if d.Spec.Replicas != nil {
+				r = int(*d.Spec.Replicas)
+			}
+			sel := map[string]string{}
+			if d.Spec.Selector != nil {
+				sel = d.Spec.Selector.MatchLabels
+			}
 			workloads = append(workloads, wlMeta{d.Name, d.Namespace, "Deployment", r, sel})
 		}
 	}
 	if cache.statefulsets != nil {
 		for _, s := range cache.statefulsets.Items {
-			if nsFilter != "" && s.Namespace != nsFilter { continue }
-			r := 1; if s.Spec.Replicas != nil { r = int(*s.Spec.Replicas) }
-			sel := map[string]string{}; if s.Spec.Selector != nil { sel = s.Spec.Selector.MatchLabels }
+			if nsFilter != "" && s.Namespace != nsFilter {
+				continue
+			}
+			r := 1
+			if s.Spec.Replicas != nil {
+				r = int(*s.Spec.Replicas)
+			}
+			sel := map[string]string{}
+			if s.Spec.Selector != nil {
+				sel = s.Spec.Selector.MatchLabels
+			}
 			workloads = append(workloads, wlMeta{s.Name, s.Namespace, "StatefulSet", r, sel})
 		}
 	}
 	if cache.daemonsets != nil {
 		for _, d := range cache.daemonsets.Items {
-			if nsFilter != "" && d.Namespace != nsFilter { continue }
-			sel := map[string]string{}; if d.Spec.Selector != nil { sel = d.Spec.Selector.MatchLabels }
+			if nsFilter != "" && d.Namespace != nsFilter {
+				continue
+			}
+			sel := map[string]string{}
+			if d.Spec.Selector != nil {
+				sel = d.Spec.Selector.MatchLabels
+			}
 			workloads = append(workloads, wlMeta{d.Name, d.Namespace, "DaemonSet", int(d.Status.DesiredNumberScheduled), sel})
 		}
 	}
 
 	for _, wl := range workloads {
-		if len(wl.selector) == 0 { continue }
+		if len(wl.selector) == 0 {
+			continue
+		}
 		spotCount, odCount, disrupted := 0, 0, 0
 		nodeSet := map[string]bool{}
 		instSet := map[string]bool{}
 		zoneSet := map[string]bool{}
 		if cache.pods != nil {
-			for _, p := range cache.pods.Items {
-				if p.Namespace != wl.ns { continue }
-				if !labelsMatch(wl.selector, p.Labels) { continue }
+			for _, p := range cache.pods {
+				if p.Namespace != wl.ns {
+					continue
+				}
+				if !labelsMatch(wl.selector, p.Labels) {
+					continue
+				}
 				nodeName := p.Spec.NodeName
 				cap := nodeCapMap[nodeName]
-				if cap == "spot" { spotCount++ } else { odCount++ }
+				if cap == "spot" {
+					spotCount++
+				} else {
+					odCount++
+				}
 				if nodeName != "" {
 					nodeSet[nodeName] = true
-					if it := nodeInstMap[nodeName]; it != "" { instSet[it] = true }
-					if z := nodeZoneMap[nodeName]; z != "" { zoneSet[z] = true }
+					if it := nodeInstMap[nodeName]; it != "" {
+						instSet[it] = true
+					}
+					if z := nodeZoneMap[nodeName]; z != "" {
+						zoneSet[z] = true
+					}
 				}
 				st := podDisplayStatus(p)
-				if st != "Running" && st != "Succeeded" && st != "Completed" { disrupted++ }
+				if st != "Running" && st != "Succeeded" && st != "Completed" {
+					disrupted++
+				}
 				for _, cs := range p.Status.ContainerStatuses {
-					if cs.RestartCount > 3 { disrupted++; break }
+					if cs.RestartCount > 3 {
+						disrupted++
+						break
+					}
 				}
 			}
 		}
-		if spotCount == 0 { continue }
+		if spotCount == 0 {
+			continue
+		}
 
 		totalPods := spotCount + odCount
 		score := 100
 
-		if totalPods <= 1 { score -= 40 } else if totalPods == 2 { score -= 15 }
+		if totalPods <= 1 {
+			score -= 40
+		} else if totalPods == 2 {
+			score -= 15
+		}
 
-		if len(nodeSet) <= 1 && totalPods > 1 { score -= 30 } else if len(nodeSet) < totalPods && totalPods > 2 { score -= 10 }
+		if len(nodeSet) <= 1 && totalPods > 1 {
+			score -= 30
+		} else if len(nodeSet) < totalPods && totalPods > 2 {
+			score -= 10
+		}
 
-		if len(instSet) <= 1 && totalPods > 1 { score -= 10 }
+		if len(instSet) <= 1 && totalPods > 1 {
+			score -= 10
+		}
 
-		if len(zoneSet) <= 1 && totalPods > 1 { score -= 10 }
+		if len(zoneSet) <= 1 && totalPods > 1 {
+			score -= 10
+		}
 
 		score -= disrupted * 20
 
 		rating := "high"
-		if score <= 30 { rating = "low" } else if score <= 60 { rating = "medium" }
+		if score <= 30 {
+			rating = "low"
+		} else if score <= 60 {
+			rating = "medium"
+		}
 
-		if score < 0 { score = 0 }
+		if score < 0 {
+			score = 0
+		}
 		resilience = append(resilience, resEntry{
 			Name: wl.name, Namespace: wl.ns, Kind: wl.kind,
 			Replicas: wl.replicas, SpotPods: spotCount, OnDemandPods: odCount,
@@ -595,7 +703,9 @@ func apiSpotInterruptions(w http.ResponseWriter, r *http.Request) {
 
 	ratingOrder := map[string]int{"low": 0, "medium": 1, "high": 2}
 	sort.Slice(resilience, func(i, k int) bool { return ratingOrder[resilience[i].Rating] < ratingOrder[resilience[k].Rating] })
-	if resilience == nil { resilience = []resEntry{} }
+	if resilience == nil {
+		resilience = []resEntry{}
+	}
 
 	j(w, map[string]interface{}{"events": events, "resilience": resilience})
 }
@@ -627,7 +737,7 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 		Node string
 	}
 	ownerPods := map[string][]podPlacement{} // "ns/ownerKind/ownerName" -> pods
-	for _, p := range cache.pods.Items {
+	for _, p := range cache.pods {
 		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending {
 			continue
 		}
@@ -667,16 +777,16 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 		Count  int    `json:"count"`
 	}
 	type violationInfo struct {
-		Kind            string        `json:"kind"`
-		Name            string        `json:"name"`
-		Namespace       string        `json:"namespace"`
-		Replicas        int           `json:"replicas"`
-		Constraint      tscInfo       `json:"constraint"`
-		ActualSkew      int           `json:"actualSkew"`
-		Distribution    []domainCount `json:"distribution"`
-		EmptyDomains    int           `json:"emptyDomains"`
-		TotalDomains    int           `json:"totalDomains"`
-		Status          string        `json:"status"`
+		Kind         string        `json:"kind"`
+		Name         string        `json:"name"`
+		Namespace    string        `json:"namespace"`
+		Replicas     int           `json:"replicas"`
+		Constraint   tscInfo       `json:"constraint"`
+		ActualSkew   int           `json:"actualSkew"`
+		Distribution []domainCount `json:"distribution"`
+		EmptyDomains int           `json:"emptyDomains"`
+		TotalDomains int           `json:"totalDomains"`
+		Status       string        `json:"status"`
 	}
 
 	topologyKeyLabel := func(key string) string {
@@ -744,7 +854,9 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 	checkWorkload := func(kind, name, ns string, tsc []corev1.TopologySpreadConstraint, replicas int) {
 		key := ns + "/" + kind + "/" + name
 		pods := ownerPods[key]
-		if len(pods) == 0 { return }
+		if len(pods) == 0 {
+			return
+		}
 
 		for _, constraint := range tsc {
 			topKey := constraint.TopologyKey
@@ -758,7 +870,9 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 			}
 
 			for _, p := range pods {
-				if p.Node == "" { continue }
+				if p.Node == "" {
+					continue
+				}
 				if labels, ok := nodeTopology[p.Node]; ok {
 					if domain, ok := labels[topKey]; ok {
 						domainCounts[domain]++
@@ -780,7 +894,9 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 					policy = "ScheduleAnyway"
 				}
 				enforcement := "Hard"
-				if policy == "ScheduleAnyway" { enforcement = "Soft" }
+				if policy == "ScheduleAnyway" {
+					enforcement = "Soft"
+				}
 				singleDist := make([]domainCount, 0, len(domainCounts))
 				for d, c := range domainCounts {
 					singleDist = append(singleDist, domainCount{Domain: d, Count: c})
@@ -790,8 +906,8 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 					Constraint: tscInfo{
 						TopologyKey: topKey, TopologyLabel: topologyKeyLabel(topKey),
 						MaxSkew: constraint.MaxSkew, WhenUnsatisfiable: policy,
-						Enforcement: enforcement,
-						Description: topologyDescription(topKey, constraint.MaxSkew, policy),
+						Enforcement:   enforcement,
+						Description:   topologyDescription(topKey, constraint.MaxSkew, policy),
 						LabelSelector: labelSelectorStr(constraint.LabelSelector),
 					},
 					ActualSkew: 0, Distribution: singleDist,
@@ -802,8 +918,12 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 
 			maxCount, minCount := 0, int(^uint(0)>>1)
 			for _, c := range domainCounts {
-				if c > maxCount { maxCount = c }
-				if c < minCount { minCount = c }
+				if c > maxCount {
+					maxCount = c
+				}
+				if c < minCount {
+					minCount = c
+				}
 			}
 			actualSkew := maxCount - minCount
 
@@ -817,7 +937,9 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			sort.Slice(dist, func(i, j int) bool {
-				if dist[i].Count != dist[j].Count { return dist[i].Count > dist[j].Count }
+				if dist[i].Count != dist[j].Count {
+					return dist[i].Count > dist[j].Count
+				}
 				return dist[i].Domain < dist[j].Domain
 			})
 
@@ -864,18 +986,26 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 	if cache.deployments != nil {
 		for _, d := range cache.deployments.Items {
 			tsc := d.Spec.Template.Spec.TopologySpreadConstraints
-			if len(tsc) == 0 { continue }
+			if len(tsc) == 0 {
+				continue
+			}
 			desired := 1
-			if d.Spec.Replicas != nil { desired = int(*d.Spec.Replicas) }
+			if d.Spec.Replicas != nil {
+				desired = int(*d.Spec.Replicas)
+			}
 			checkWorkload("Deployment", d.Name, d.Namespace, tsc, desired)
 		}
 	}
 	if cache.statefulsets != nil {
 		for _, s := range cache.statefulsets.Items {
 			tsc := s.Spec.Template.Spec.TopologySpreadConstraints
-			if len(tsc) == 0 { continue }
+			if len(tsc) == 0 {
+				continue
+			}
 			desired := 1
-			if s.Spec.Replicas != nil { desired = int(*s.Spec.Replicas) }
+			if s.Spec.Replicas != nil {
+				desired = int(*s.Spec.Replicas)
+			}
 			checkWorkload("StatefulSet", s.Name, s.Namespace, tsc, desired)
 		}
 	}
@@ -883,7 +1013,9 @@ func apiTopologySpread(w http.ResponseWriter, r *http.Request) {
 	statusOrder := map[string]int{"violated": 0, "at-limit": 1, "satisfied": 2}
 	sort.Slice(results, func(i, j int) bool {
 		oi, oj := statusOrder[results[i].Status], statusOrder[results[j].Status]
-		if oi != oj { return oi < oj }
+		if oi != oj {
+			return oi < oj
+		}
 		return results[i].Namespace+results[i].Name < results[j].Namespace+results[j].Name
 	})
 
@@ -895,7 +1027,10 @@ func apiEvents(w http.ResponseWriter, r *http.Request) {
 	filterNS := r.URL.Query().Get("namespace")
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.events == nil { j(w, []interface{}{}); return }
+	if cache.events == nil {
+		j(w, []interface{}{})
+		return
+	}
 
 	type ev struct {
 		Type    string `json:"type"`
@@ -908,14 +1043,20 @@ func apiEvents(w http.ResponseWriter, r *http.Request) {
 		NS      string `json:"namespace"`
 	}
 	out := make([]ev, 0)
-	for _, e := range cache.events.Items {
-		if filterType != "" && e.Type != filterType { continue }
-		if filterNS != "" && e.Namespace != filterNS { continue }
+	for _, e := range cache.events {
+		if filterType != "" && e.Type != filterType {
+			continue
+		}
+		if filterNS != "" && e.Namespace != filterNS {
+			continue
+		}
 		ts := e.LastTimestamp.Time
-		if ts.IsZero() { ts = e.CreationTimestamp.Time }
+		if ts.IsZero() {
+			ts = e.CreationTimestamp.Time
+		}
 		out = append(out, ev{
 			Type: e.Type, Reason: e.Reason, Kind: e.InvolvedObject.Kind,
-			Object: e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
+			Object:  e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
 			Message: e.Message, Age: shortDur(time.Since(ts)), Count: e.Count, NS: e.Namespace,
 		})
 	}
@@ -926,7 +1067,10 @@ func apiEvents(w http.ResponseWriter, r *http.Request) {
 
 func apiSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
-	if q == "" { j(w, []interface{}{}); return }
+	if q == "" {
+		j(w, []interface{}{})
+		return
+	}
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 
@@ -938,10 +1082,12 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 	out := make([]result, 0, 50)
 
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items {
+		for _, p := range cache.pods {
 			if strings.Contains(strings.ToLower(p.Name), q) || strings.Contains(strings.ToLower(p.Namespace), q) {
 				out = append(out, result{"Pod", p.Name, p.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -949,7 +1095,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, d := range cache.deployments.Items {
 			if strings.Contains(strings.ToLower(d.Name), q) || strings.Contains(strings.ToLower(d.Namespace), q) {
 				out = append(out, result{"Deployment", d.Name, d.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -957,7 +1105,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, n := range cache.nodes.Items {
 			if strings.Contains(strings.ToLower(n.Name), q) {
 				out = append(out, result{"Node", n.Name, ""})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -965,7 +1115,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, i := range cache.ingresses.Items {
 			if strings.Contains(strings.ToLower(i.Name), q) || strings.Contains(strings.ToLower(i.Namespace), q) {
 				out = append(out, result{"Ingress", i.Name, i.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -973,7 +1125,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, s := range cache.statefulsets.Items {
 			if strings.Contains(strings.ToLower(s.Name), q) || strings.Contains(strings.ToLower(s.Namespace), q) {
 				out = append(out, result{"StatefulSet", s.Name, s.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -981,7 +1135,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, d := range cache.daemonsets.Items {
 			if strings.Contains(strings.ToLower(d.Name), q) || strings.Contains(strings.ToLower(d.Namespace), q) {
 				out = append(out, result{"DaemonSet", d.Name, d.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -989,7 +1145,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, jb := range cache.jobs.Items {
 			if strings.Contains(strings.ToLower(jb.Name), q) || strings.Contains(strings.ToLower(jb.Namespace), q) {
 				out = append(out, result{"Job", jb.Name, jb.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -997,7 +1155,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, cj := range cache.cronjobs.Items {
 			if strings.Contains(strings.ToLower(cj.Name), q) || strings.Contains(strings.ToLower(cj.Namespace), q) {
 				out = append(out, result{"CronJob", cj.Name, cj.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -1005,7 +1165,9 @@ func apiSearch(w http.ResponseWriter, r *http.Request) {
 		for _, s := range cache.services.Items {
 			if strings.Contains(strings.ToLower(s.Name), q) || strings.Contains(strings.ToLower(s.Namespace), q) {
 				out = append(out, result{"Service", s.Name, s.Namespace})
-				if len(out) >= 50 { break }
+				if len(out) >= 50 {
+					break
+				}
 			}
 		}
 	}
@@ -1018,7 +1180,10 @@ func apiHPA(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.hpas == nil { jGz(w, r, []interface{}{}); return }
+	if cache.hpas == nil {
+		jGz(w, r, []interface{}{})
+		return
+	}
 
 	type metric struct {
 		Name    string `json:"name"`
@@ -1027,15 +1192,15 @@ func apiHPA(w http.ResponseWriter, r *http.Request) {
 		Target  string `json:"target"`
 	}
 	type hpa struct {
-		Name       string   `json:"name"`
-		Namespace  string   `json:"namespace"`
-		Reference  string   `json:"reference"`
-		MinReplicas int32   `json:"minReplicas"`
-		MaxReplicas int32   `json:"maxReplicas"`
-		Current    int32    `json:"currentReplicas"`
-		Desired    int32    `json:"desiredReplicas"`
-		Metrics    []metric `json:"metrics"`
-		Conditions []struct {
+		Name        string   `json:"name"`
+		Namespace   string   `json:"namespace"`
+		Reference   string   `json:"reference"`
+		MinReplicas int32    `json:"minReplicas"`
+		MaxReplicas int32    `json:"maxReplicas"`
+		Current     int32    `json:"currentReplicas"`
+		Desired     int32    `json:"desiredReplicas"`
+		Metrics     []metric `json:"metrics"`
+		Conditions  []struct {
 			Type    string `json:"type"`
 			Status  string `json:"status"`
 			Reason  string `json:"reason"`
@@ -1046,9 +1211,13 @@ func apiHPA(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]hpa, 0)
 	for _, h := range cache.hpas.Items {
-		if ns != "" && h.Namespace != ns { continue }
+		if ns != "" && h.Namespace != ns {
+			continue
+		}
 		min := int32(1)
-		if h.Spec.MinReplicas != nil { min = *h.Spec.MinReplicas }
+		if h.Spec.MinReplicas != nil {
+			min = *h.Spec.MinReplicas
+		}
 
 		metrics := make([]metric, 0)
 		for i, m := range h.Spec.Metrics {
@@ -1092,9 +1261,13 @@ func apiHPA(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				case autov2.PodsMetricSourceType:
-					if cm.Pods != nil { me.Current = cm.Pods.Current.AverageValue.String() }
+					if cm.Pods != nil {
+						me.Current = cm.Pods.Current.AverageValue.String()
+					}
 				case autov2.ObjectMetricSourceType:
-					if cm.Object != nil { me.Current = cm.Object.Current.Value.String() }
+					if cm.Object != nil {
+						me.Current = cm.Object.Current.Value.String()
+					}
 				}
 			}
 			metrics = append(metrics, me)
@@ -1117,7 +1290,7 @@ func apiHPA(w http.ResponseWriter, r *http.Request) {
 
 		out = append(out, hpa{
 			Name: h.Name, Namespace: h.Namespace,
-			Reference: h.Spec.ScaleTargetRef.Kind + "/" + h.Spec.ScaleTargetRef.Name,
+			Reference:   h.Spec.ScaleTargetRef.Kind + "/" + h.Spec.ScaleTargetRef.Name,
 			MinReplicas: min, MaxReplicas: h.Spec.MaxReplicas,
 			Current: h.Status.CurrentReplicas, Desired: h.Status.DesiredReplicas,
 			Metrics: metrics, Conditions: conds,

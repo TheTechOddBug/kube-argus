@@ -42,7 +42,8 @@ const JITRequestsModal = lazy(() => import('./components/views/JITRequestsView')
 function App() {
   const initial = parseRoute()
   const [tab, setTabRaw] = useState<TabId>(initial.tab)
-  const [ns, setNs] = useState('')
+  const initSp = new URLSearchParams(window.location.search)
+  const [ns, setNsRaw] = useState(initSp.get('ns') || '')
   const [workloadKind, setWorkloadKind] = useState('')
   const [podTarget, setPodTargetRaw] = useState<{ ns: string; name: string } | null>(initial.pod)
   const [nodeTarget, setNodeTargetRaw] = useState<string | null>(initial.node)
@@ -59,7 +60,17 @@ function App() {
   const [showJITRequests, setShowJITRequests] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [pendingJITCount, setPendingJITCount] = useState(0)
-  const [troubledSub, setTroubledSub] = useState<'pods' | 'spot' | 'resilience'>('pods')
+  type TroubledSub = 'pods' | 'spot' | 'resilience'
+  const validTroubledSubs: TroubledSub[] = ['pods', 'spot', 'resilience']
+  const initTroubledSub = initSp.get('sub') as TroubledSub | null
+  const [troubledSub, _setTroubledSub] = useState<TroubledSub>(initTroubledSub && validTroubledSubs.includes(initTroubledSub) ? initTroubledSub : 'pods')
+  const setTroubledSub = (s: TroubledSub) => {
+    _setTroubledSub(s)
+    const url = new URL(window.location.href)
+    if (s === 'pods') url.searchParams.delete('sub')
+    else url.searchParams.set('sub', s)
+    window.history.replaceState(null, '', url.toString())
+  }
   const [troubledExpanded, setTroubledExpanded] = useState(false)
   const [spotHiddenReasons, setSpotHiddenReasons] = useState<string[]>([])
   const [nodePool, setNodePoolRaw] = useState(initial.nodePool)
@@ -67,6 +78,7 @@ function App() {
   const { theme, toggle: toggleTheme } = useTheme()
   const [user, setUser] = useState<UserInfo | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [impersonating, setImpersonating] = useState(false)
   const [authModeHint, setAuthModeHint] = useState<string>('none')
   const { data: namespaces } = useFetch<string[]>('/api/namespaces')
   const { data: clusterInfo } = useFetch<{ name: string }>('/api/cluster-info')
@@ -84,11 +96,12 @@ function App() {
     return `/workloads/${wt.kind.toLowerCase()}/${wt.ns}/${wt.name}`
   }, [])
 
-  const tabUrl = useCallback((t: string) => {
+  const tabUrl = useCallback((t: string, curNs?: string) => {
     if (t === 'overview') return '/'
     if (t === 'nodes') return nodesUrl()
-    return `/${t}`
-  }, [nodesUrl])
+    const n = curNs ?? ns
+    return n ? `/${t}?ns=${encodeURIComponent(n)}` : `/${t}`
+  }, [nodesUrl, ns])
 
   const setTab = useCallback((t: TabId) => {
     setTabRaw(t)
@@ -101,6 +114,14 @@ function App() {
     if (t !== 'nodes') setNodePoolRaw('')
     pushUrl(tabUrl(t))
   }, [pushUrl, tabUrl])
+
+  const setNs = useCallback((newNs: string) => {
+    setNsRaw(newNs)
+    const url = new URL(window.location.href)
+    if (newNs) url.searchParams.set('ns', newNs)
+    else url.searchParams.delete('ns')
+    window.history.replaceState(null, '', url.toString())
+  }, [])
 
   const setNodePool = useCallback((pool: string) => {
     setNodePoolRaw(pool)
@@ -160,12 +181,25 @@ function App() {
       setHpaTargetRaw(r.hpa)
       setNodePoolRaw(r.nodePool)
       const sp = new URLSearchParams(window.location.search)
-      const urlNs = sp.get('ns')
-      if (urlNs) setNs(urlNs)
+      setNsRaw(sp.get('ns') || '')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
+
+  // Prefetch adjacent view chunks so drill-down navigation feels instant
+  useEffect(() => {
+    const idle = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 200)
+    if (tab === 'nodes') idle(() => { import('./components/views/NodeDescribeView') })
+    if (tab === 'pods') idle(() => { import('./components/views/PodDetailView') })
+    if (tab === 'workloads') {
+      idle(() => { import('./components/views/WorkloadDetailView') })
+      idle(() => { import('./components/views/CronJobDetailView') })
+    }
+    if (tab === 'services') idle(() => { import('./components/views/ServiceDetailView') })
+    if (tab === 'ingress') idle(() => { import('./components/views/IngressesView') })
+    if (tab === 'hpa') idle(() => { import('./components/views/HPADetailView') })
+  }, [tab])
 
   useEffect(() => {
     fetch('/api/me').then(async r => {
@@ -177,6 +211,30 @@ function App() {
       return r.json()
     }).then(d => { if (d) { setUser(d); setAuthModeHint(d.authMode || 'none'); setAuthLoading(false) } }).catch(() => { setUser({ email: 'anonymous', role: 'viewer', authMode: 'none' }); setAuthLoading(false) })
   }, [])
+
+  // WebSocket — multiplexes presence (online users) and audit deltas.
+  const [presenceUsers, setPresenceUsers] = useState<{ email: string; role: string; lastSeen: string; ip: string }[]>([])
+  const [auditDeltas, setAuditDeltas] = useState<any[]>([])
+  useEffect(() => {
+    if (!user) return
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    let ws: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout>
+    const connect = () => {
+      ws = new WebSocket(`${proto}//${location.host}/api/ws/presence`)
+      ws.onmessage = (e) => {
+        try {
+          const env = JSON.parse(e.data)
+          if (env?.type === 'presence' && Array.isArray(env.data)) setPresenceUsers(env.data)
+          else if (env?.type === 'audit' && env.data) setAuditDeltas(prev => [env.data, ...prev].slice(0, 200))
+        } catch {}
+      }
+      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000) }
+      ws.onerror = () => { ws?.close() }
+    }
+    connect()
+    return () => { clearTimeout(reconnectTimer); ws?.close() }
+  }, [user])
 
   useEffect(() => {
     if (!user || user.role !== 'admin') return
@@ -225,7 +283,8 @@ function App() {
       </div>
     </div>
   )
-  const userInfo = user || { email: 'anonymous', role: 'viewer', authMode: 'none' }
+  const realUser = user || { email: 'anonymous', role: 'viewer', authMode: 'none' }
+  const userInfo = impersonating && realUser.role === 'admin' ? { ...realUser, role: 'viewer' as const } : realUser
 
   const handleSearchSelect = (r: SearchResult) => {
     if (r.kind === 'Pod') {
@@ -261,8 +320,8 @@ function App() {
     <AuthCtx.Provider value={userInfo}>
       <div className="flex h-full overflow-hidden bg-hull-950 pt-safe">
         {showSearch && <SearchModal onClose={() => setShowSearch(false)} onSelect={handleSearchSelect} />}
-        {showAudit && <AuditTrailModal onClose={() => setShowAudit(false)} />}
-        {showOnlineUsers && <OnlineUsersModal currentEmail={userInfo.email} onClose={() => setShowOnlineUsers(false)} />}
+        {showAudit && <AuditTrailModal deltas={auditDeltas} onClose={() => setShowAudit(false)} />}
+        {showOnlineUsers && <OnlineUsersModal currentEmail={userInfo.email} users={presenceUsers} onClose={() => setShowOnlineUsers(false)} />}
         {showJITRequests && <Suspense fallback={null}><JITRequestsModal onClose={() => setShowJITRequests(false)} /></Suspense>}
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
@@ -323,10 +382,10 @@ function App() {
         </aside>
 
         {detailContent ? (
-          <div className="flex flex-1 flex-col overflow-hidden"><ErrorBoundary><Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>{detailContent}</Suspense></ErrorBoundary></div>
+          <div className="flex flex-1 flex-col overflow-hidden "><ErrorBoundary><Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>{detailContent}</Suspense></ErrorBoundary></div>
         ) : (
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <header className="shrink-0 glass border-0 border-b border-hull-700/40 px-3 py-2.5 relative z-40">
+        <div className="flex flex-1 flex-col overflow-hidden ">
+          <header className="shrink-0 glass border-0 border-b border-hull-700/40 px-3 py-2.5 relative z-30">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <button onClick={() => setSideOpen(true)} className="rounded-lg p-1.5 text-gray-400 hover:text-white hover:bg-hull-800/60 transition-all active:scale-90" aria-label="Open sidebar" aria-expanded={sideOpen}>
@@ -367,11 +426,11 @@ function App() {
                     </div>
                     <div className="hidden sm:block text-left">
                       <p className="text-[10px] font-medium text-gray-300 leading-tight truncate max-w-[100px]">{userInfo.email.split('@')[0]}</p>
-                      <p className={`text-[8px] font-bold uppercase tracking-widest ${userInfo.role === 'admin' ? 'text-neon-cyan' : 'text-gray-500'}`}>{userInfo.role}</p>
+                      <p className={`text-[8px] font-bold uppercase tracking-widest ${impersonating ? 'text-neon-amber' : userInfo.role === 'admin' ? 'text-neon-cyan' : 'text-gray-500'}`}>{impersonating ? 'viewing as viewer' : userInfo.role}</p>
                     </div>
                     <svg className="hidden sm:block text-gray-600" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
                   </button>
-                  {showUserMenu && <UserMenuDropdown email={userInfo.email} role={userInfo.role} onClose={() => setShowUserMenu(false)} onAudit={() => { setShowUserMenu(false); setShowAudit(true) }} onOnlineUsers={() => { setShowUserMenu(false); setShowOnlineUsers(true) }} onAccessRequests={() => { setShowUserMenu(false); setShowJITRequests(true) }} onSettings={() => { setShowUserMenu(false); setShowSettings(true) }} pendingJITCount={pendingJITCount} containerRef={userMenuRef} />}
+                  {showUserMenu && <UserMenuDropdown email={userInfo.email} role={realUser.role} impersonating={impersonating} onToggleImpersonate={() => setImpersonating(v => !v)} onClose={() => setShowUserMenu(false)} onAudit={() => { setShowUserMenu(false); setShowAudit(true) }} onOnlineUsers={() => { setShowUserMenu(false); setShowOnlineUsers(true) }} onAccessRequests={() => { setShowUserMenu(false); setShowJITRequests(true) }} onSettings={() => { setShowUserMenu(false); setShowSettings(true) }} pendingJITCount={pendingJITCount} containerRef={userMenuRef} />}
                 </div>
               </div>
             </div>

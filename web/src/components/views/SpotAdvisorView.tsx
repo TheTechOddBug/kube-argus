@@ -9,7 +9,17 @@ type CostData = { namespaces: CostEntry[]; nodepools: NodepoolCost[] }
 
 export function CostAllocationPanel() {
   const { data, err, loading } = useFetch<CostData>('/api/namespace-costs', 60000)
-  const [tab, setTab] = useState<'namespace' | 'nodepool'>('namespace')
+  type CostTab = 'namespace' | 'nodepool'
+  const validCostTabs: CostTab[] = ['namespace', 'nodepool']
+  const urlTab = new URLSearchParams(window.location.search).get('tab') as CostTab | null
+  const [tab, _setTab] = useState<CostTab>(urlTab && validCostTabs.includes(urlTab) ? urlTab : 'namespace')
+  const setTab = (t: CostTab) => {
+    _setTab(t)
+    const url = new URL(window.location.href)
+    if (t === 'namespace') url.searchParams.delete('tab')
+    else url.searchParams.set('tab', t)
+    window.history.replaceState(null, '', url.toString())
+  }
   const [nsSortKey, setNsSortKey] = useState<'monthlyCost' | 'namespace'>('monthlyCost')
   const [nsSortAsc, setNsSortAsc] = useState(false)
 

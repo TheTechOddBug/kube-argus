@@ -30,7 +30,7 @@ export function CronJobDetailView({ ns, name, onBack, onPod }: { ns: string; nam
     setTriggerError(null)
     try {
       await post(`/api/cronjobs/${ns}/${name}/trigger`)
-      refetch()
+      await refetch()
     } catch (e: unknown) {
       setTriggerError(e instanceof Error ? e.message : String(e))
     } finally {

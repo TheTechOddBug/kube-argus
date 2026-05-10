@@ -38,7 +38,15 @@ export function WorkloadsView({ namespace, initialKind, onWorkload }: { namespac
   const [toast, setToast] = useState<string | null>(null)
   const [scaleTarget, setScaleTarget] = useState<{ ns: string; name: string; current: number } | null>(null)
   const [scaleVal, setScaleVal] = useState(0)
-  const [kindFilter, setKindFilter] = useState(initialKind || '')
+  const urlKind = new URLSearchParams(window.location.search).get('kind') || ''
+  const [kindFilter, _setKindFilter] = useState(initialKind || urlKind || '')
+  const setKindFilter = (k: string) => {
+    _setKindFilter(k)
+    const url = new URL(window.location.href)
+    if (k) url.searchParams.set('kind', k)
+    else url.searchParams.delete('kind')
+    window.history.replaceState(null, '', url.toString())
+  }
   const [jitModal, setJitModal] = useState<{ ns: string; name: string; kind: string } | null>(null)
   const [jitGrants, setJitGrants] = useState<Set<string>>(new Set())
   const [jitPendings, setJitPendings] = useState<Set<string>>(new Set())
@@ -73,7 +81,7 @@ export function WorkloadsView({ namespace, initialKind, onWorkload }: { namespac
     try {
       await post(`/api/workloads/${ns}/${name}/restart?kind=${kind}`)
       setToast(`${name} restarting`)
-      refetch()
+      await refetch()
     }
     catch (e: any) { setToast(`Error: ${e.message}`) }
     finally { setBusy(null); setTimeout(() => setToast(null), 3000) }
@@ -87,7 +95,7 @@ export function WorkloadsView({ namespace, initialKind, onWorkload }: { namespac
       await post(`/api/workloads/${scaleTarget.ns}/${scaleTarget.name}/scale?replicas=${scaleVal}`)
       setToast(`${scaleTarget.name} scaled to ${scaleVal}`)
       setScaleTarget(null)
-      refetch()
+      await refetch()
     } catch (e: any) { setToast(`Error: ${e.message}`) }
     finally { setBusy(null); setTimeout(() => setToast(null), 3000) }
   }

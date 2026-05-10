@@ -21,23 +21,23 @@ import (
 // ─── Spot Advisor Cache ─────────────────────────────────────────────
 
 type spotAdvisorEntry struct {
-	R int     `json:"r"` // interruption range: 0=<5%, 1=5-10%, 2=10-15%, 3=15-20%, 4=>20%
-	S int     `json:"s"` // savings % vs on-demand
+	R int `json:"r"` // interruption range: 0=<5%, 1=5-10%, 2=10-15%, 3=15-20%, 4=>20%
+	S int `json:"s"` // savings % vs on-demand
 }
 
 type spotInstanceTypeInfo struct {
-	Cores  int     `json:"cores"`
-	RamGB  float64 `json:"ram_gb"`
-	EMR    bool    `json:"emr"`
+	Cores int     `json:"cores"`
+	RamGB float64 `json:"ram_gb"`
+	EMR   bool    `json:"emr"`
 }
 
 type spotAdvisorData struct {
-	mu           sync.RWMutex
-	entries      map[string]spotAdvisorEntry   // instanceType -> advisor entry (for detected region)
-	typeSpecs    map[string]spotInstanceTypeInfo // instanceType -> specs
-	spotPrices   map[string]float64             // instanceType -> current spot price/hr
-	region       string
-	lastRefresh  time.Time
+	mu          sync.RWMutex
+	entries     map[string]spotAdvisorEntry     // instanceType -> advisor entry (for detected region)
+	typeSpecs   map[string]spotInstanceTypeInfo // instanceType -> specs
+	spotPrices  map[string]float64              // instanceType -> current spot price/hr
+	region      string
+	lastRefresh time.Time
 }
 
 var spotCache = &spotAdvisorData{}
@@ -45,7 +45,9 @@ var spotCache = &spotAdvisorData{}
 func detectRegion() string {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if cache.nodes == nil { return "" }
+	if cache.nodes == nil {
+		return ""
+	}
 	for _, n := range cache.nodes.Items {
 		if z, ok := n.Labels["topology.kubernetes.io/zone"]; ok && len(z) > 1 {
 			return z[:len(z)-1]
@@ -76,7 +78,7 @@ func (s *spotAdvisorData) refresh() {
 	}
 
 	var raw struct {
-		InstanceTypes map[string]spotInstanceTypeInfo            `json:"instance_types"`
+		InstanceTypes map[string]spotInstanceTypeInfo                   `json:"instance_types"`
 		SpotAdvisor   map[string]map[string]map[string]spotAdvisorEntry `json:"spot_advisor"` // region -> OS -> type -> entry
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -106,7 +108,9 @@ func (s *spotAdvisorData) refresh() {
 
 	// Also include alternatives and consolidation options for pricing
 	baseTypes := make([]string, 0, len(usedTypes))
-	for t := range usedTypes { baseTypes = append(baseTypes, t) }
+	for t := range usedTypes {
+		baseTypes = append(baseTypes, t)
+	}
 	for _, t := range baseTypes {
 		for _, alt := range generateAlternatives(t) {
 			usedTypes[alt] = true
@@ -120,15 +124,21 @@ func (s *spotAdvisorData) refresh() {
 		func() {
 			defer func() { recover() }() // graceful if no EC2 permissions
 			sess, err := session.NewSession(&aws.Config{Region: aws.String(region)})
-			if err != nil { return }
+			if err != nil {
+				return
+			}
 			ec2Client := ec2.New(sess)
 			typeNames := make([]*string, 0, len(usedTypes))
-			for t := range usedTypes { typeNames = append(typeNames, aws.String(t)) }
+			for t := range usedTypes {
+				typeNames = append(typeNames, aws.String(t))
+			}
 
 			// Batch in groups of 50 to avoid API limits
 			for i := 0; i < len(typeNames); i += 50 {
 				end := i + 50
-				if end > len(typeNames) { end = len(typeNames) }
+				if end > len(typeNames) {
+					end = len(typeNames)
+				}
 				batch := typeNames[i:end]
 				input := &ec2.DescribeSpotPriceHistoryInput{
 					InstanceTypes:       batch,
@@ -166,7 +176,9 @@ func (s *spotAdvisorData) refresh() {
 
 func parseInstanceType(instanceType string) (baseChar string, gen int, suffix string, size string) {
 	parts := strings.SplitN(instanceType, ".", 2)
-	if len(parts) != 2 { return }
+	if len(parts) != 2 {
+		return
+	}
 	family := parts[0]
 	size = parts[1]
 	baseChar = string(family[0])
@@ -189,7 +201,9 @@ func isGraviton(suffix string) bool {
 
 func generateAlternatives(instanceType string) []string {
 	baseChar, gen, suffix, size := parseInstanceType(instanceType)
-	if size == "" { return nil }
+	if size == "" {
+		return nil
+	}
 
 	graviton := isGraviton(suffix)
 
@@ -219,7 +233,9 @@ func generateAlternatives(instanceType string) []string {
 	if related, ok := crossFamilies[baseChar]; ok {
 		for _, rf := range related {
 			for g := gen - 1; g <= gen+2 && g <= 8; g++ {
-				if g < 5 { continue }
+				if g < 5 {
+					continue
+				}
 				for _, v := range variants {
 					candidate := fmt.Sprintf("%s%d%s.%s", rf, g, v, size)
 					alternatives = append(alternatives, candidate)
@@ -235,17 +251,23 @@ var sizeOrder = []string{"large", "xlarge", "2xlarge", "4xlarge", "8xlarge", "12
 
 func sizeIndex(s string) int {
 	for i, v := range sizeOrder {
-		if v == s { return i }
+		if v == s {
+			return i
+		}
 	}
 	return -1
 }
 
 func generateConsolidationAlternatives(instanceType string) []string {
 	baseChar, gen, suffix, size := parseInstanceType(instanceType)
-	if size == "" { return nil }
+	if size == "" {
+		return nil
+	}
 
 	idx := sizeIndex(size)
-	if idx < 0 { return nil }
+	if idx < 0 {
+		return nil
+	}
 
 	graviton := isGraviton(suffix)
 	var variants []string
@@ -259,7 +281,9 @@ func generateConsolidationAlternatives(instanceType string) []string {
 	for si := idx + 1; si < len(sizeOrder); si++ {
 		upSize := sizeOrder[si]
 		for g := gen - 1; g <= gen+2 && g <= 8; g++ {
-			if g < 5 { continue }
+			if g < 5 {
+				continue
+			}
 			for _, v := range variants {
 				candidate := fmt.Sprintf("%s%d%s.%s", baseChar, g, v, upSize)
 				if candidate != instanceType {
@@ -275,7 +299,9 @@ func generateConsolidationAlternatives(instanceType string) []string {
 		if related, ok := crossFamilies[baseChar]; ok {
 			for _, rf := range related {
 				for g := gen - 1; g <= gen+2 && g <= 8; g++ {
-					if g < 5 { continue }
+					if g < 5 {
+						continue
+					}
 					for _, v := range variants {
 						candidate := fmt.Sprintf("%s%d%s.%s", rf, g, v, upSize)
 						alternatives = append(alternatives, candidate)
@@ -289,11 +315,16 @@ func generateConsolidationAlternatives(instanceType string) []string {
 
 func interruptLabel(r int) string {
 	switch r {
-	case 0: return "<5%"
-	case 1: return "5-10%"
-	case 2: return "10-15%"
-	case 3: return "15-20%"
-	default: return ">20%"
+	case 0:
+		return "<5%"
+	case 1:
+		return "5-10%"
+	case 2:
+		return "10-15%"
+	case 3:
+		return "15-20%"
+	default:
+		return ">20%"
 	}
 }
 
@@ -336,56 +367,64 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 	// Build per-node pod request sums
 	nodeRequests := map[string][2]int64{} // name -> {cpuMilli, memMiB}
 	if cache.pods != nil {
-		for _, p := range cache.pods.Items {
-			if p.Status.Phase != corev1.PodRunning { continue }
+		for _, p := range cache.pods {
+			if p.Status.Phase != corev1.PodRunning {
+				continue
+			}
 			nn := p.Spec.NodeName
-			if nn == "" { continue }
+			if nn == "" {
+				continue
+			}
 			cur := nodeRequests[nn]
 			for _, c := range p.Spec.Containers {
-				if r, ok := c.Resources.Requests[corev1.ResourceCPU]; ok { cur[0] += r.MilliValue() }
-				if r, ok := c.Resources.Requests[corev1.ResourceMemory]; ok { cur[1] += r.Value() / (1024 * 1024) }
+				if r, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+					cur[0] += r.MilliValue()
+				}
+				if r, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+					cur[1] += r.Value() / (1024 * 1024)
+				}
 			}
 			nodeRequests[nn] = cur
 		}
 	}
 
 	type instanceSummary struct {
-		InstanceType      string   `json:"instanceType"`
-		Count             int      `json:"count"`
-		VCPUs             int64    `json:"vcpus"`
-		MemoryGiB         float64  `json:"memoryGiB"`
-		InterruptRange    int      `json:"interruptRange"`
-		InterruptLabel    string   `json:"interruptLabel"`
-		SavingsPct        int      `json:"savingsPct"`
-		SpotPrice         float64  `json:"spotPrice,omitempty"`
-		MonthlyCost       float64  `json:"monthlyCost,omitempty"`
-		TotalMonthlyCost  float64  `json:"totalMonthlyCost,omitempty"`
-		Nodepools         []string `json:"nodepools"`
-		TotalUsedCpuM     int64    `json:"totalUsedCpuM"`
-		TotalUsedMemMi    int64    `json:"totalUsedMemMi"`
-		TotalReqCpuM      int64    `json:"totalReqCpuM"`
-		TotalReqMemMi     int64    `json:"totalReqMemMi"`
-		TotalAllocCpuM    int64    `json:"totalAllocCpuM"`
-		TotalAllocMemMi   int64    `json:"totalAllocMemMi"`
-		AvgCpuPct         int      `json:"avgCpuPct"`
-		AvgMemPct         int      `json:"avgMemPct"`
-		EffectiveCpuM     int64    `json:"effectiveCpuM"`
-		EffectiveMemMi    int64    `json:"effectiveMemMi"`
+		InstanceType     string   `json:"instanceType"`
+		Count            int      `json:"count"`
+		VCPUs            int64    `json:"vcpus"`
+		MemoryGiB        float64  `json:"memoryGiB"`
+		InterruptRange   int      `json:"interruptRange"`
+		InterruptLabel   string   `json:"interruptLabel"`
+		SavingsPct       int      `json:"savingsPct"`
+		SpotPrice        float64  `json:"spotPrice,omitempty"`
+		MonthlyCost      float64  `json:"monthlyCost,omitempty"`
+		TotalMonthlyCost float64  `json:"totalMonthlyCost,omitempty"`
+		Nodepools        []string `json:"nodepools"`
+		TotalUsedCpuM    int64    `json:"totalUsedCpuM"`
+		TotalUsedMemMi   int64    `json:"totalUsedMemMi"`
+		TotalReqCpuM     int64    `json:"totalReqCpuM"`
+		TotalReqMemMi    int64    `json:"totalReqMemMi"`
+		TotalAllocCpuM   int64    `json:"totalAllocCpuM"`
+		TotalAllocMemMi  int64    `json:"totalAllocMemMi"`
+		AvgCpuPct        int      `json:"avgCpuPct"`
+		AvgMemPct        int      `json:"avgMemPct"`
+		EffectiveCpuM    int64    `json:"effectiveCpuM"`
+		EffectiveMemMi   int64    `json:"effectiveMemMi"`
 	}
 
 	type alternative struct {
-		InstanceType    string  `json:"instanceType"`
-		VCPUs           int     `json:"vcpus"`
-		MemoryGB        float64 `json:"memoryGB"`
-		InterruptRange  int     `json:"interruptRange"`
-		InterruptLabel  string  `json:"interruptLabel"`
-		SavingsPct      int     `json:"savingsPct"`
-		SpotPrice       float64 `json:"spotPrice,omitempty"`
-		NodesNeeded     int     `json:"nodesNeeded"`
+		InstanceType     string  `json:"instanceType"`
+		VCPUs            int     `json:"vcpus"`
+		MemoryGB         float64 `json:"memoryGB"`
+		InterruptRange   int     `json:"interruptRange"`
+		InterruptLabel   string  `json:"interruptLabel"`
+		SavingsPct       int     `json:"savingsPct"`
+		SpotPrice        float64 `json:"spotPrice,omitempty"`
+		NodesNeeded      int     `json:"nodesNeeded"`
 		TotalMonthlyCost float64 `json:"totalMonthlyCost,omitempty"`
-		MonthlySaving   float64 `json:"monthlySaving"`
-		FitNote         string  `json:"fitNote"`
-		Score           float64 `json:"score"`
+		MonthlySaving    float64 `json:"monthlySaving"`
+		FitNote          string  `json:"fitNote"`
+		Score            float64 `json:"score"`
 	}
 
 	type recommendation struct {
@@ -404,12 +443,18 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 				capType = strings.ToLower(n.Labels["eks.amazonaws.com/capacityType"])
 			}
 		}
-		if capType != "spot" { continue }
+		if capType != "spot" {
+			continue
+		}
 		totalSpotNodes++
 
 		itype := n.Labels["node.kubernetes.io/instance-type"]
-		if itype == "" { itype = n.Labels["beta.kubernetes.io/instance-type"] }
-		if itype == "" { continue }
+		if itype == "" {
+			itype = n.Labels["beta.kubernetes.io/instance-type"]
+		}
+		if itype == "" {
+			continue
+		}
 
 		allocCpuM := n.Status.Allocatable.Cpu().MilliValue()
 		allocMemMi := n.Status.Allocatable.Memory().Value() / (1024 * 1024)
@@ -422,9 +467,13 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 
 		// Effective load = max(usage, requests) per resource
 		effCpu := usage[0]
-		if reqs[0] > effCpu { effCpu = reqs[0] }
+		if reqs[0] > effCpu {
+			effCpu = reqs[0]
+		}
 		effMem := usage[1]
-		if reqs[1] > effMem { effMem = reqs[1] }
+		if reqs[1] > effMem {
+			effMem = reqs[1]
+		}
 
 		if _, ok := typeMap[itype]; !ok {
 			entry := spotCache.entries[itype]
@@ -453,17 +502,26 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 
 		found := false
 		for _, np := range s.Nodepools {
-			if np == nodepool { found = true; break }
+			if np == nodepool {
+				found = true
+				break
+			}
 		}
-		if !found && nodepool != "" { s.Nodepools = append(s.Nodepools, nodepool) }
+		if !found && nodepool != "" {
+			s.Nodepools = append(s.Nodepools, nodepool)
+		}
 	}
 
 	// Finalize per-type aggregates
 	for _, s := range typeMap {
 		s.MonthlyCost = s.SpotPrice * 730
 		s.TotalMonthlyCost = s.SpotPrice * 730 * float64(s.Count)
-		if s.TotalAllocCpuM > 0 { s.AvgCpuPct = int(s.TotalUsedCpuM * 100 / s.TotalAllocCpuM) }
-		if s.TotalAllocMemMi > 0 { s.AvgMemPct = int(s.TotalUsedMemMi * 100 / s.TotalAllocMemMi) }
+		if s.TotalAllocCpuM > 0 {
+			s.AvgCpuPct = int(s.TotalUsedCpuM * 100 / s.TotalAllocCpuM)
+		}
+		if s.TotalAllocMemMi > 0 {
+			s.AvgMemPct = int(s.TotalUsedMemMi * 100 / s.TotalAllocMemMi)
+		}
 	}
 
 	const packingFactor = 0.85
@@ -477,9 +535,13 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 
 		for _, altType := range alts {
 			entry, ok := spotCache.entries[altType]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			spec, hasSpec := spotCache.typeSpecs[altType]
-			if !hasSpec { continue }
+			if !hasSpec {
+				continue
+			}
 
 			price := spotCache.spotPrices[altType]
 
@@ -497,16 +559,24 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 				nodesByMem = int(math.Ceil(float64(summary.EffectiveMemMi) / altMemCapMi))
 			}
 			nodesNeeded := nodesByCpu
-			if nodesByMem > nodesNeeded { nodesNeeded = nodesByMem }
-			if nodesNeeded < 1 { nodesNeeded = 1 }
+			if nodesByMem > nodesNeeded {
+				nodesNeeded = nodesByMem
+			}
+			if nodesNeeded < 1 {
+				nodesNeeded = 1
+			}
 
 			totalCost := float64(0)
-			if price > 0 { totalCost = price * 730 * float64(nodesNeeded) }
+			if price > 0 {
+				totalCost = price * 730 * float64(nodesNeeded)
+			}
 
 			// Only include if: cheaper total cost, OR same/fewer nodes with lower interruption
 			isCheaper := totalCost > 0 && currentTotalCost > 0 && totalCost < currentTotalCost
 			isBetterAvailability := entry.R < summary.InterruptRange && nodesNeeded <= summary.Count
-			if !isCheaper && !isBetterAvailability { continue }
+			if !isCheaper && !isBetterAvailability {
+				continue
+			}
 
 			saving := currentTotalCost - totalCost
 
@@ -524,7 +594,9 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 
 			// Score: lower is better; balance total cost and availability
 			score := float64(0)
-			if totalCost > 0 { score = totalCost / 100 }
+			if totalCost > 0 {
+				score = totalCost / 100
+			}
 			score += float64(entry.R) * 20
 			score -= saving / 50
 
@@ -544,26 +616,28 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		sort.Slice(altList, func(i, j int) bool { return altList[i].Score < altList[j].Score })
-		if len(altList) > 8 { altList = altList[:8] }
+		if len(altList) > 8 {
+			altList = altList[:8]
+		}
 		recs = append(recs, recommendation{Current: *summary, Alternatives: altList})
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Current.TotalMonthlyCost > recs[j].Current.TotalMonthlyCost })
 
 	// Consolidation: suggest fewer, larger nodes across all instance types
 	type consolidation struct {
-		InstanceType     string  `json:"instanceType"`
-		VCPUs            int     `json:"vcpus"`
-		MemoryGB         float64 `json:"memoryGB"`
-		InterruptRange   int     `json:"interruptRange"`
-		InterruptLabel   string  `json:"interruptLabel"`
-		SpotPrice        float64 `json:"spotPrice,omitempty"`
-		NodesNeeded      int     `json:"nodesNeeded"`
-		ReplacesNodes    int     `json:"replacesNodes"`
+		InstanceType     string   `json:"instanceType"`
+		VCPUs            int      `json:"vcpus"`
+		MemoryGB         float64  `json:"memoryGB"`
+		InterruptRange   int      `json:"interruptRange"`
+		InterruptLabel   string   `json:"interruptLabel"`
+		SpotPrice        float64  `json:"spotPrice,omitempty"`
+		NodesNeeded      int      `json:"nodesNeeded"`
+		ReplacesNodes    int      `json:"replacesNodes"`
 		ReplacesTypes    []string `json:"replacesTypes"`
-		TotalMonthlyCost float64 `json:"totalMonthlyCost,omitempty"`
-		MonthlySaving    float64 `json:"monthlySaving"`
-		Reason           string  `json:"reason"`
-		Score            float64 `json:"score"`
+		TotalMonthlyCost float64  `json:"totalMonthlyCost,omitempty"`
+		MonthlySaving    float64  `json:"monthlySaving"`
+		Reason           string   `json:"reason"`
+		Score            float64  `json:"score"`
 	}
 
 	totalEffCpu := int64(0)
@@ -582,36 +656,54 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 		seen := map[string]bool{}
 		for _, itype := range allTypes {
 			for _, altType := range generateConsolidationAlternatives(itype) {
-				if seen[altType] { continue }
+				if seen[altType] {
+					continue
+				}
 				seen[altType] = true
 
 				entry, ok := spotCache.entries[altType]
-				if !ok { continue }
+				if !ok {
+					continue
+				}
 				spec, hasSpec := spotCache.typeSpecs[altType]
-				if !hasSpec { continue }
+				if !hasSpec {
+					continue
+				}
 				price := spotCache.spotPrices[altType]
 
 				altCpuCapM := float64(spec.Cores) * 1000 * packingFactor
 				altMemCapMi := spec.RamGB * 1024 * packingFactor
-				if altCpuCapM == 0 || altMemCapMi == 0 { continue }
+				if altCpuCapM == 0 || altMemCapMi == 0 {
+					continue
+				}
 
 				nodesByCpu := int(math.Ceil(float64(totalEffCpu) / altCpuCapM))
 				nodesByMem := int(math.Ceil(float64(totalEffMem) / altMemCapMi))
 				nodesNeeded := nodesByCpu
-				if nodesByMem > nodesNeeded { nodesNeeded = nodesByMem }
-				if nodesNeeded < 1 { nodesNeeded = 1 }
+				if nodesByMem > nodesNeeded {
+					nodesNeeded = nodesByMem
+				}
+				if nodesNeeded < 1 {
+					nodesNeeded = 1
+				}
 
-				if nodesNeeded >= totalSpotNodes { continue }
+				if nodesNeeded >= totalSpotNodes {
+					continue
+				}
 
 				totalCost := float64(0)
-				if price > 0 { totalCost = price * 730 * float64(nodesNeeded) }
+				if price > 0 {
+					totalCost = price * 730 * float64(nodesNeeded)
+				}
 				saving := totalCurrentCost - totalCost
 
 				reason := fmt.Sprintf("Consolidate %d nodes (%s) → %d x %s", totalSpotNodes, strings.Join(allTypes, ", "), nodesNeeded, altType)
 
 				score := float64(nodesNeeded) * 10
 				score += float64(entry.R) * 25
-				if saving > 0 { score -= saving / 30 }
+				if saving > 0 {
+					score -= saving / 30
+				}
 
 				consols = append(consols, consolidation{
 					InstanceType:     altType,
@@ -631,7 +723,9 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sort.Slice(consols, func(i, j int) bool { return consols[i].Score < consols[j].Score })
-		if len(consols) > 10 { consols = consols[:10] }
+		if len(consols) > 10 {
+			consols = consols[:10]
+		}
 	}
 
 	// Compute total cluster cost: spot + on-demand
@@ -649,12 +743,18 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 				capType = strings.ToLower(v)
 			}
 		}
-		if capType == "spot" { continue }
+		if capType == "spot" {
+			continue
+		}
 		totalOnDemandNodes++
 
 		itype := n.Labels["node.kubernetes.io/instance-type"]
-		if itype == "" { itype = n.Labels["beta.kubernetes.io/instance-type"] }
-		if itype == "" { continue }
+		if itype == "" {
+			itype = n.Labels["beta.kubernetes.io/instance-type"]
+		}
+		if itype == "" {
+			continue
+		}
 		onDemandByType[itype]++
 
 		// Derive on-demand price from spot price + savings %
@@ -683,22 +783,22 @@ func apiSpotAdvisor(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(odList, func(i, j int) bool { return odList[i].Count > odList[j].Count })
 
 	jGz(w, r, map[string]interface{}{
-		"ready":           true,
-		"region":          spotCache.region,
-		"totalSpotNodes":  totalSpotNodes,
-		"recommendations": recs,
-		"consolidations":  consols,
+		"ready":               true,
+		"region":              spotCache.region,
+		"totalSpotNodes":      totalSpotNodes,
+		"recommendations":     recs,
+		"consolidations":      consols,
 		"totalEffectiveCpuM":  totalEffCpu,
 		"totalEffectiveMemMi": totalEffMem,
-		"lastRefresh":     spotCache.lastRefresh.Format(time.RFC3339),
+		"lastRefresh":         spotCache.lastRefresh.Format(time.RFC3339),
 		"clusterCost": map[string]interface{}{
-			"totalNodes":            totalClusterNodes,
-			"spotNodes":             totalSpotNodes,
-			"onDemandNodes":         totalOnDemandNodes,
-			"spotMonthlyCost":       math.Round(totalSpotMonthlyCost*100) / 100,
-			"onDemandMonthlyCost":   math.Round(totalOnDemandMonthlyCost*100) / 100,
-			"totalMonthlyCost":      math.Round((totalSpotMonthlyCost+totalOnDemandMonthlyCost)*100) / 100,
-			"onDemandByType":        odList,
+			"totalNodes":          totalClusterNodes,
+			"spotNodes":           totalSpotNodes,
+			"onDemandNodes":       totalOnDemandNodes,
+			"spotMonthlyCost":     math.Round(totalSpotMonthlyCost*100) / 100,
+			"onDemandMonthlyCost": math.Round(totalOnDemandMonthlyCost*100) / 100,
+			"totalMonthlyCost":    math.Round((totalSpotMonthlyCost+totalOnDemandMonthlyCost)*100) / 100,
+			"onDemandByType":      odList,
 		},
 	})
 }

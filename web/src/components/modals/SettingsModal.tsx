@@ -6,6 +6,220 @@ const Spinner = () => (
   </div>
 )
 
+function WebhookSection({ showToast }: { showToast: (msg: string, ok: boolean) => void }) {
+  const [webhookURL, setWebhookURL] = useState('')
+  const [signingSecret, setSigningSecret] = useState('')
+  const [events, setEvents] = useState<string[]>([])
+  const [knownEvents, setKnownEvents] = useState<string[]>([])
+  const [enabled, setEnabled] = useState(false)
+  const [savedWebhook, setSavedWebhook] = useState('')
+  const [savedSecret, setSavedSecret] = useState('')
+  const [editingWebhook, setEditingWebhook] = useState(false)
+  const [editingSecret, setEditingSecret] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [eventsDirty, setEventsDirty] = useState(false)
+
+  const load = () => {
+    fetch('/api/settings/webhook')
+      .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json() })
+      .then(d => {
+        setSavedWebhook(d.webhookURL || '')
+        setSavedSecret(d.signingSecret || '')
+        setEvents(Array.isArray(d.events) ? d.events : [])
+        setKnownEvents(d.knownEvents || [])
+        setEnabled(!!d.enabled)
+        setEventsDirty(false)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }
+
+  useEffect(() => { load() /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
+
+  const hasNewWebhook = (editingWebhook || !savedWebhook) && webhookURL !== ''
+  const hasNewSecret = (editingSecret || !savedSecret) && signingSecret !== ''
+
+  const toggleEvent = (ev: string) => {
+    setEvents(prev => prev.includes(ev) ? prev.filter(x => x !== ev) : [...prev, ev])
+    setEventsDirty(true)
+  }
+
+  const test = async () => {
+    if (!hasNewWebhook && !savedWebhook) {
+      showToast('Configure a Webhook URL first', false)
+      return
+    }
+    setTesting(true)
+    try {
+      const resp = await fetch('/api/settings/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookURL: hasNewWebhook ? webhookURL : '' }),
+      })
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({ error: resp.statusText }))
+        throw new Error(d.error || resp.statusText)
+      }
+      showToast('Test event sent — check your endpoint', true)
+    } catch (e: any) {
+      showToast(`Test failed: ${e.message}`, false)
+    } finally { setTesting(false) }
+  }
+
+  const save = async () => {
+    const payload: Record<string, unknown> = {}
+    if (hasNewWebhook) payload.webhookURL = webhookURL
+    if (hasNewSecret) payload.signingSecret = signingSecret
+    if (eventsDirty) payload.events = events
+    if (Object.keys(payload).length === 0) {
+      showToast('Nothing to save', false)
+      return
+    }
+    setSaving(true)
+    try {
+      const resp = await fetch('/api/settings/webhook', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!resp.ok) throw new Error(await resp.text())
+      showToast('Webhook settings saved', true)
+      load()
+      setEditingWebhook(false); setEditingSecret(false)
+      setWebhookURL(''); setSigningSecret('')
+    } catch (e: any) {
+      showToast(`Error: ${e.message}`, false)
+    } finally { setSaving(false) }
+  }
+
+  const clear = async () => {
+    setSaving(true)
+    try {
+      await fetch('/api/settings/webhook', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookURL: '', signingSecret: '', events: [] }),
+      })
+      setSavedWebhook(''); setSavedSecret('')
+      setWebhookURL(''); setSigningSecret('')
+      setEvents([])
+      setEnabled(false)
+      setEditingWebhook(false); setEditingSecret(false)
+      setEventsDirty(false)
+      showToast('Webhook integration disabled', true)
+    } catch (e: any) {
+      showToast(`Error: ${e.message}`, false)
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+        </svg>
+        <h3 className="text-xs font-semibold text-white uppercase tracking-wider">Webhook Notifications</h3>
+        {enabled && (
+          <span className="ml-auto rounded-full bg-neon-green/10 border border-neon-green/20 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-green">Active</span>
+        )}
+      </div>
+      <p className="text-[10px] text-gray-500 mb-1">POST a JSON event to your endpoint when a JIT request is created, approved, denied, revoked, or expires.</p>
+      <p className="text-[9px] text-gray-600 mb-3">Alternatively, set <span className="font-mono text-gray-500">NOTIFY_WEBHOOK_URL</span> and <span className="font-mono text-gray-500">NOTIFY_WEBHOOK_SECRET</span> env vars.</p>
+
+      {loading ? (
+        <div className="flex justify-center py-4"><Spinner /></div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[10px] font-medium text-gray-400 mb-1">Webhook URL</label>
+            {savedWebhook && !editingWebhook ? (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 rounded-lg border border-hull-600 bg-hull-800/50 px-3 py-2 text-xs text-gray-400 font-mono truncate">{savedWebhook}</span>
+                <button onClick={() => { setEditingWebhook(true); setWebhookURL('') }} className="shrink-0 rounded-lg border border-hull-600 bg-hull-800 px-3 py-1.5 text-[10px] font-medium text-gray-300 hover:bg-hull-700 transition-colors">Change</button>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={webhookURL}
+                  onChange={e => setWebhookURL(e.target.value)}
+                  placeholder="https://your-service.example.com/webhook"
+                  autoFocus={editingWebhook}
+                  className="w-full rounded-lg border border-hull-600 bg-hull-800 px-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-neon-cyan/50 focus:ring-1 focus:ring-neon-cyan/20 transition-colors"
+                />
+                {editingWebhook && (
+                  <button onClick={() => { setEditingWebhook(false); setWebhookURL('') }} className="mt-1 text-[9px] text-gray-500 hover:text-gray-300">Cancel</button>
+                )}
+              </>
+            )}
+            <p className="text-[9px] text-gray-600 mt-1">Receives JSON: <span className="font-mono text-gray-500">{`{event, cluster, timestamp, actor, data}`}</span></p>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-medium text-gray-400 mb-1">Signing Secret <span className="text-gray-600">(optional — adds X-KubeArgus-Signature header)</span></label>
+            {savedSecret && !editingSecret ? (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 rounded-lg border border-hull-600 bg-hull-800/50 px-3 py-2 text-xs text-gray-400 font-mono">{savedSecret}</span>
+                <button onClick={() => { setEditingSecret(true); setSigningSecret('') }} className="shrink-0 rounded-lg border border-hull-600 bg-hull-800 px-3 py-1.5 text-[10px] font-medium text-gray-300 hover:bg-hull-700 transition-colors">Change</button>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="password"
+                  value={signingSecret}
+                  onChange={e => setSigningSecret(e.target.value)}
+                  placeholder="random-shared-secret"
+                  autoFocus={editingSecret}
+                  className="w-full rounded-lg border border-hull-600 bg-hull-800 px-3 py-2 text-xs text-white placeholder-gray-600 outline-none focus:border-neon-cyan/50 focus:ring-1 focus:ring-neon-cyan/20 transition-colors"
+                />
+                {editingSecret && (
+                  <button onClick={() => { setEditingSecret(false); setSigningSecret('') }} className="mt-1 text-[9px] text-gray-500 hover:text-gray-300">Cancel</button>
+                )}
+              </>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-medium text-gray-400 mb-1">Events <span className="text-gray-600">(none selected = receive all)</span></label>
+            <div className="flex flex-wrap gap-1">
+              {knownEvents.map(ev => {
+                const on = events.includes(ev)
+                return (
+                  <button key={ev} onClick={() => toggleEvent(ev)}
+                    className={`rounded-md border px-2 py-0.5 text-[9px] font-mono transition-colors ${on ? 'border-neon-cyan/40 bg-neon-cyan/10 text-neon-cyan' : 'border-hull-600 bg-hull-800 text-gray-500 hover:text-gray-300'}`}>
+                    {ev}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            {(hasNewWebhook || savedWebhook) && (
+              <button onClick={test} disabled={testing} className="rounded-lg border border-hull-600 bg-hull-800 px-4 py-1.5 text-[10px] font-medium text-gray-300 transition-colors hover:bg-hull-700 disabled:opacity-40">
+                {testing ? 'Testing...' : 'Test Connection'}
+              </button>
+            )}
+            {(hasNewWebhook || hasNewSecret || eventsDirty) && (
+              <button onClick={save} disabled={saving} className="rounded-lg border border-neon-cyan/30 bg-neon-cyan/10 px-4 py-1.5 text-[10px] font-medium text-neon-cyan transition-colors hover:bg-neon-cyan/20 disabled:opacity-40">
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            )}
+            {enabled && (
+              <button onClick={clear} className="ml-auto rounded-lg border border-red-900/40 bg-red-950/20 px-4 py-1.5 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/20">
+                Disable
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [webhookURL, setWebhookURL] = useState('')
   const [signingSecret, setSigningSecret] = useState('')
@@ -140,7 +354,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div className="relative z-10 mx-4 w-full max-w-lg overflow-hidden rounded-2xl border border-hull-600 bg-hull-900 shadow-2xl shadow-black/60 flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="relative z-10 mx-4 w-full max-w-lg max-h-[85vh] overflow-hidden rounded-2xl border border-hull-600 bg-hull-900 shadow-2xl shadow-black/60 flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-hull-700/40 px-5 py-3">
           <div>
             <h2 className="text-sm font-bold text-white">Settings</h2>
@@ -157,7 +371,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <div className="p-5 space-y-5">
+        <div className="p-5 space-y-5 overflow-y-auto flex-1 min-h-0">
           <div>
             <div className="flex items-center gap-2 mb-3">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
@@ -251,6 +465,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               </div>
             )}
           </div>
+
+          <div className="border-t border-hull-700/40" />
+
+          <WebhookSection showToast={showToast} />
         </div>
       </div>
     </div>

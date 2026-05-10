@@ -19,21 +19,24 @@ export function useFetch<T>(url: string | null, ms = 0) {
     if (!url) return false
     return !swrHit<T>(url)
   })
-  const refetch = useCallback(() => {
+  const refetch = useCallback(async (): Promise<void> => {
     if (!url) return
-    fetch(url).then(async r => {
+    try {
+      const r = await fetch(url)
       if (r.status === 401) { window.location.href = '/auth/login'; return }
       const text = await r.text()
       if (!r.ok) {
         try { const j = JSON.parse(text); throw new Error(j.error || text) } catch (e: any) { if (e.message) throw e; throw new Error(text) }
       }
-      try { return JSON.parse(text) } catch { throw new Error('Invalid response from server') }
-    }).then(d => {
-      if (d !== undefined) {
-        swrCache.set(url, { data: d, ts: Date.now() })
-        setData(d); setErr(null)
-      }
-    }).catch(e => setErr(e.message || String(e))).finally(() => setLoading(false))
+      let d: T
+      try { d = JSON.parse(text) } catch { throw new Error('Invalid response from server') }
+      swrCache.set(url, { data: d, ts: Date.now() })
+      setData(d); setErr(null)
+    } catch (e: any) {
+      setErr(e.message || String(e))
+    } finally {
+      setLoading(false)
+    }
   }, [url])
   useEffect(() => {
     if (!url) { setLoading(false); return }

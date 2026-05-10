@@ -55,6 +55,11 @@ env:
   # LLM_GATEWAY_MODEL: ""
   # AWS_SECRET_NAME: ""
   # AWS_REGION: "us-east-1"
+  # ── Notifications (Settings UI takes precedence) ──
+  # SLACK_WEBHOOK_URL: ""
+  # SLACK_SIGNING_SECRET: ""
+  # NOTIFY_WEBHOOK_URL: ""
+  # NOTIFY_WEBHOOK_SECRET: ""
 
 existingSecret: ""
 

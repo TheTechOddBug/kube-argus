@@ -222,6 +222,17 @@ Auth mode is auto-detected from which env vars you set:
 | `AUDIT_CONFIGMAP_NAME` | `kube-argus-audit` | ConfigMap name for audit trail |
 | `JIT_RETENTION_DAYS` | `7` | Days to keep terminal JIT requests |
 
+#### Notifications
+
+Settings page UI takes precedence; env vars are a bootstrap fallback for headless deploys.
+
+| Variable | Description |
+|----------|-------------|
+| `SLACK_WEBHOOK_URL` | Incoming Slack webhook for JIT request notifications |
+| `SLACK_SIGNING_SECRET` | Slack signing secret (enables Approve/Deny buttons in Slack) |
+| `NOTIFY_WEBHOOK_URL` | Generic webhook endpoint for JIT events (`{event, cluster, timestamp, actor, data}` JSON) |
+| `NOTIFY_WEBHOOK_SECRET` | If set, requests carry `X-KubeArgus-Signature: sha256=<hex>` HMAC of the body |
+
 #### AWS
 
 | Variable | Default | Description |

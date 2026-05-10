@@ -12,7 +12,17 @@ export function PVCsView({ namespace }: { namespace: string }) {
   const q = namespace ? `?namespace=${namespace}` : ''
   const { data, err, loading } = useFetch<StorageData>(`/api/storage${q}`, 15000)
   const [expandedPVC, setExpandedPVC] = useState<string | null>(null)
-  const [subTab, setSubTab] = useState<'pvcs' | 'pvs' | 'scs'>('pvcs')
+  type SubTab = 'pvcs' | 'pvs' | 'scs'
+  const validSubTabs: SubTab[] = ['pvcs', 'pvs', 'scs']
+  const urlTab = new URLSearchParams(window.location.search).get('tab') as SubTab | null
+  const [subTab, _setSubTab] = useState<SubTab>(urlTab && validSubTabs.includes(urlTab) ? urlTab : 'pvcs')
+  const setSubTab = (t: SubTab) => {
+    _setSubTab(t)
+    const url = new URL(window.location.href)
+    if (t === 'pvcs') url.searchParams.delete('tab')
+    else url.searchParams.set('tab', t)
+    window.history.replaceState(null, '', url.toString())
+  }
   const [showYaml, setShowYaml] = useState<{ kind: string; ns: string; name: string } | null>(null)
 
   if (loading) return <Spinner />

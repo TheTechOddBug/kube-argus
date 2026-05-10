@@ -4,7 +4,17 @@ import { useFetch } from '../../hooks/useFetch'
 import { Spinner } from '../ui/Atoms'
 
 export function EventsView({ namespace }: { namespace: string }) {
-  const [typeFilter, setTypeFilter] = useState<'' | 'Warning' | 'Normal'>('')
+  type EvtFilter = '' | 'Warning' | 'Normal'
+  const validEvtFilters: EvtFilter[] = ['', 'Warning', 'Normal']
+  const urlEvtFilter = new URLSearchParams(window.location.search).get('type') as EvtFilter | null
+  const [typeFilter, _setTypeFilter] = useState<EvtFilter>(urlEvtFilter && validEvtFilters.includes(urlEvtFilter) ? urlEvtFilter : '')
+  const setTypeFilter = (t: EvtFilter) => {
+    _setTypeFilter(t)
+    const url = new URL(window.location.href)
+    if (t) url.searchParams.set('type', t)
+    else url.searchParams.delete('type')
+    window.history.replaceState(null, '', url.toString())
+  }
   const params = new URLSearchParams()
   if (typeFilter) params.set('type', typeFilter)
   if (namespace) params.set('namespace', namespace)

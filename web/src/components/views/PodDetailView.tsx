@@ -309,7 +309,17 @@ export function PodMetricsPanel({ namespace, pod }: { namespace: string; pod: st
 export function PodDetailView({ ns, name, onBack, onWorkload }: { ns: string; name: string; onBack: () => void; onWorkload?: (ns: string, name: string, kind: string) => void }) {
   const { role } = useAuth()
   const isAdmin = role === 'admin'
-  const [tab, setTab] = useState<'logs' | 'events' | 'info' | 'metrics'>('info')
+  type PodTab = 'logs' | 'events' | 'info' | 'metrics'
+  const validTabs: PodTab[] = ['logs', 'events', 'info', 'metrics']
+  const urlTab = new URLSearchParams(window.location.search).get('tab') as PodTab | null
+  const [tab, _setTab] = useState<PodTab>(urlTab && validTabs.includes(urlTab) ? urlTab : 'info')
+  const setTab = (t: PodTab) => {
+    _setTab(t)
+    const url = new URL(window.location.href)
+    if (t === 'info') url.searchParams.delete('tab')
+    else url.searchParams.set('tab', t)
+    window.history.replaceState(null, '', url.toString())
+  }
   const [logs, setLogs] = useState<string[]>([])
   const [logStatus, setLogStatus] = useState<'connecting' | 'streaming' | 'ended' | 'error'>('connecting')
   const logEndRef = useRef<HTMLDivElement>(null)

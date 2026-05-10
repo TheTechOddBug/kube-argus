@@ -65,7 +65,9 @@ func apiYaml(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "PUT" {
-		if !requireAdmin(w, r) { return }
+		if !requireAdmin(w, r) {
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 2*1024*1024))
 		if err != nil {
 			je(w, "read body: "+err.Error(), 400)
@@ -76,39 +78,66 @@ func apiYaml(w http.ResponseWriter, r *http.Request) {
 		switch kind {
 		case "Deployment":
 			var o appsv1.Deployment
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.AppsV1().Deployments(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "StatefulSet":
 			var o appsv1.StatefulSet
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.AppsV1().StatefulSets(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "DaemonSet":
 			var o appsv1.DaemonSet
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.AppsV1().DaemonSets(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "Service":
 			var o corev1.Service
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.CoreV1().Services(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "ConfigMap":
 			var o corev1.ConfigMap
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.CoreV1().ConfigMaps(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "Secret":
 			var o corev1.Secret
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.CoreV1().Secrets(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "CronJob":
 			var o batchv1.CronJob
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.BatchV1().CronJobs(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "Job":
 			var o batchv1.Job
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.BatchV1().Jobs(ns).Update(c, &o, metav1.UpdateOptions{})
 		case "HPA":
 			var o autov2.HorizontalPodAutoscaler
-			if err := json.Unmarshal(body, &o); err != nil { je(w, "invalid json: "+err.Error(), 400); return }
+			if err := json.Unmarshal(body, &o); err != nil {
+				je(w, "invalid json: "+err.Error(), 400)
+				return
+			}
 			_, updateErr = clientset.AutoscalingV2().HorizontalPodAutoscalers(ns).Update(c, &o, metav1.UpdateOptions{})
 		default:
 			je(w, "edit not supported for: "+kind, 400)
@@ -121,7 +150,7 @@ func apiYaml(w http.ResponseWriter, r *http.Request) {
 		if sd, ok := r.Context().Value(userCtxKey).(*sessionData); ok && sd != nil {
 			auditRecord(sd.Email, sd.Role, "resource.edit", fmt.Sprintf("%s %s/%s", kind, ns, name), "", clientIP(r))
 		}
-		go cache.refresh()
+		triggerRebuild()
 		j(w, map[string]string{"ok": "updated"})
 		return
 	}

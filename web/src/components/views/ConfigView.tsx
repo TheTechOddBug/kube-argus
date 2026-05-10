@@ -87,7 +87,17 @@ export function ConfigView({ namespace }: { namespace: string }) {
   const q = namespace ? `?namespace=${namespace}` : ''
   const { data, err, loading } = useFetch<ConfigItem[]>(`/api/configs${q}`, 15000)
   const { data: driftData } = useFetch<DriftEntry[]>(`/api/config-drift${q}`, 30000)
-  const [kindFilter, setKindFilter] = useState<'' | 'ConfigMap' | 'Secret'>('')
+  type CfgKind = '' | 'ConfigMap' | 'Secret'
+  const validCfgKinds: CfgKind[] = ['', 'ConfigMap', 'Secret']
+  const urlCfgKind = new URLSearchParams(window.location.search).get('kind') as CfgKind | null
+  const [kindFilter, _setKindFilter] = useState<CfgKind>(urlCfgKind && validCfgKinds.includes(urlCfgKind) ? urlCfgKind : '')
+  const setKindFilter = (k: CfgKind) => {
+    _setKindFilter(k)
+    const url = new URL(window.location.href)
+    if (k) url.searchParams.set('kind', k)
+    else url.searchParams.delete('kind')
+    window.history.replaceState(null, '', url.toString())
+  }
   const [search, setSearch] = useState(() => {
     const sp = new URLSearchParams(window.location.search)
     return sp.get('search') || ''

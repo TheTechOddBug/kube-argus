@@ -2,6 +2,69 @@
 
 All notable changes to Kube-Argus will be documented in this file.
 
+## [v1.2.6] — 2026-05-10
+
+### ⭐ New Features
+
+#### Generic Webhook Notifications
+POST a JSON event to any HTTP endpoint when a JIT request is created, approved, denied, revoked, or expires.
+
+- Single configurable endpoint with optional **per-event filter** chips (subscribe to a subset of `jit.requested`, `jit.approved`, `jit.denied`, `jit.revoked`, `jit.expired`)
+- **HMAC-SHA256 signing** via `X-KubeArgus-Signature` header when a signing secret is set
+- **Generic JSON envelope**: `{event, cluster, timestamp, actor, data}` — works with Zapier, n8n, PagerDuty, custom services
+- Configurable from the dashboard Settings modal or via `NOTIFY_WEBHOOK_URL` / `NOTIFY_WEBHOOK_SECRET` env vars
+- ConfigMap persistence — settings survive pod restarts
+
+#### Audit Trail Consistency Across Pod Replicas
+Multi-replica deployments now show a unified audit trail.
+
+- **Read-merge-write** ConfigMap pattern with 10s background sync
+- Local writes debounced via dirty flag — no more per-record goroutine storm under load
+- Conflicts retried on next sync tick with no busy-loop
+
+#### Real-Time Presence and Audit Updates
+Online users and audit trail update over WebSocket — no more 5s polling.
+
+- New `/api/ws/presence` endpoint multiplexes presence and audit deltas via `{type, data}` envelope
+- AuditTrailModal merges WS deltas with its initial fetch, deduplicated by `(time, actor, action, resource)`
+- 60s safety-net refetch as a fallback
+
+#### Shareable URLs
+Bookmark and share any view's filter state.
+
+- `?ns=` for namespace, `?sub=` for the Troubled-Workloads sub-tab on Overview
+- `?tab=` on Pod Detail, Workload Detail, PVCs, Spot Advisor
+- `?kind=` on Workloads and ConfigMaps/Secrets, `?type=` on Events
+- All preserved on browser back/forward
+
+#### Admin "View as Viewer"
+Toggle in the user menu to preview the dashboard with viewer-level UI without signing out — handy for verifying that JIT-gated buttons hide correctly.
+
+### ⚡ Performance
+
+- **Cache rebuild no longer value-copies pods/events/replicasets** — switched internal storage to `[]*corev1.Pod` and friends. On a 5,000-pod cluster this eliminates millions of struct copies per debounce window.
+- **Prometheus query cache key now step-aligned** — keys no longer change every second within a step window, so the 30s TTL actually accumulates hits.
+- **Audit persist debounced** — dirty flag plus 5s ticker replaces per-record `go auditPersist()` and removes the auditMarkDirty self-fire that could storm under sustained ConfigMap conflicts.
+- **AI diagnose** now passes `r.Context()` through to the upstream LLM call — client disconnect aborts the stream and saves tokens.
+
+### 🎨 UX
+
+- **Optimistic feedback** on every action button: workload restart, scale, CronJob "Run Now", and JIT approve all stay in their busy state through both the action and the data refetch, so the row is consistent before the button returns.
+- **Light theme readability** improvements for form inputs, modal scrims, and toasts.
+- **ErrorBoundary auto-reloads once** on stale chunk-hash errors after a deploy, then falls back to a manual retry.
+- **AuditTrailModal error state** with a retry button instead of a silent empty list.
+
+### 🔒 Security
+
+- **WebSocket Origin header validated** against the dashboard host. Closes a CSRF-on-WS info-disclosure path on `/api/exec` and `/api/ws/presence` where a logged-in admin visiting a malicious page could leak the online-user list via session-cookie-bearing WebSockets.
+- **Presence WebSocket writes serialised per-connection** with a `sync.Mutex` — gorilla `*Conn` is not safe for concurrent writes, and the broadcast loop plus 30s ping ticker could race under load and panic the process.
+- `NOTIFY_WEBHOOK_URL` / `NOTIFY_WEBHOOK_SECRET` added to the AWS Secrets Manager loader's known-keys list, matching `SLACK_WEBHOOK_URL` parity.
+
+### 📚 Docs
+
+- Notification env vars (`SLACK_WEBHOOK_URL`, `SLACK_SIGNING_SECRET`, `NOTIFY_WEBHOOK_URL`, `NOTIFY_WEBHOOK_SECRET`) documented in the project README, helm chart README, and helm `values.yaml`.
+- ArtifactHub helm README now includes a 2×2 screenshot grid and project logo.
+
 ## [v1.2.5] — 2026-04-10
 
 ### ⭐ New Features

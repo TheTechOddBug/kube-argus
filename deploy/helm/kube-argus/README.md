@@ -1,8 +1,41 @@
 # Kube-Argus Helm Chart
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/logo.svg" alt="Kube-Argus Logo" width="120">
+</p>
+
 The Kubernetes dashboard you'd build if you were tired of switching between k9s, Grafana, and kubectl.
 
 Live cluster state, streaming pod logs, interactive shell, YAML editor, drain wizard, cost analysis, and AI-powered diagnostics — in a single binary with zero dependencies.
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%">
+<strong>Cluster Overview</strong> — Live node status, CPU/memory utilisation, top namespaces, and resource counts refreshed every 10 seconds.
+<br><br>
+<img src="https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-overview.png" alt="Cluster Overview">
+</td>
+<td width="50%">
+<strong>Node Detail & Metrics</strong> — kubectl describe-style detail with Prometheus metrics, events, pod list, and admin actions (cordon, drain).
+<br><br>
+<img src="https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-node-detail.png" alt="Node Detail and Metrics">
+</td>
+</tr>
+<tr>
+<td width="50%">
+<strong>Pod Metrics & Logs</strong> — Per-pod CPU/memory graphs, live log streaming, container selector, and AI-powered diagnosis.
+<br><br>
+<img src="https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-pod-metrics.png" alt="Pod Metrics and Logs">
+</td>
+<td width="50%">
+<strong>Spot Advisor & Cost Analysis</strong> — Spot instance risk scoring, cluster cost breakdown, and intelligent consolidation recommendations.
+<br><br>
+<img src="https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-spot-advisor.png" alt="Spot Advisor and Cost Analysis">
+</td>
+</tr>
+</table>
 
 ## Quick Install
 
@@ -82,6 +115,11 @@ Set via `env.*` in values or through `existingSecret`:
 | `LLM_GATEWAY_URL` | LLM API endpoint for AI diagnostics |
 | `LLM_GATEWAY_KEY` | LLM API key |
 | `LLM_GATEWAY_MODEL` | LLM model name |
+| **Notifications** (Settings UI takes precedence) | |
+| `SLACK_WEBHOOK_URL` | Incoming Slack webhook URL for JIT notifications |
+| `SLACK_SIGNING_SECRET` | Slack signing secret — enables Approve/Deny buttons in Slack |
+| `NOTIFY_WEBHOOK_URL` | Generic JSON webhook for JIT events |
+| `NOTIFY_WEBHOOK_SECRET` | Signing secret — adds `X-KubeArgus-Signature: sha256=<hex>` HMAC header |
 
 ## Examples
 

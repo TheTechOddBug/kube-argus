@@ -295,7 +295,17 @@ export function WorkloadDetailView({ ns, name, kind, onBack, onPod }: { ns: stri
   const { role } = useAuth()
   const isAdmin = role === 'admin'
   const { data, err, loading, refetch } = useFetch<any>(`/api/workloads/${ns}/${name}/describe?kind=${kind}`, 10000)
-  const [activeSection, setActiveSection] = useState<'overview' | 'pods' | 'containers' | 'events' | 'labels' | 'metrics' | 'replicasets' | 'agglogs'>('overview')
+  type Section = 'overview' | 'pods' | 'containers' | 'events' | 'labels' | 'metrics' | 'replicasets' | 'agglogs'
+  const validSections: Section[] = ['overview', 'pods', 'containers', 'events', 'labels', 'metrics', 'replicasets', 'agglogs']
+  const urlTab = new URLSearchParams(window.location.search).get('tab') as Section | null
+  const [activeSection, _setActiveSection] = useState<Section>(urlTab && validSections.includes(urlTab) ? urlTab : 'overview')
+  const setActiveSection = (s: Section) => {
+    _setActiveSection(s)
+    const url = new URL(window.location.href)
+    if (s === 'overview') url.searchParams.delete('tab')
+    else url.searchParams.set('tab', s)
+    window.history.replaceState(null, '', url.toString())
+  }
   const [busy, setBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [scaleOpen, setScaleOpen] = useState(false)
@@ -332,7 +342,7 @@ export function WorkloadDetailView({ ns, name, kind, onBack, onPod }: { ns: stri
     try {
       await post(`/api/workloads/${ns}/${name}/restart?kind=${kind}`)
       setToast(`${name} restarting`)
-      refetch()
+      await refetch()
     }
     catch (e: any) { setToast(`Error: ${e.message}`) }
     finally { setBusy(null); setTimeout(() => setToast(null), 3000) }
@@ -340,7 +350,7 @@ export function WorkloadDetailView({ ns, name, kind, onBack, onPod }: { ns: stri
 
   const doScale = async () => {
     setBusy('scale')
-    try { await post(`/api/workloads/${ns}/${name}/scale?replicas=${scaleVal}`); setToast(`${name} scaled to ${scaleVal}`); setScaleOpen(false); refetch() }
+    try { await post(`/api/workloads/${ns}/${name}/scale?replicas=${scaleVal}`); setToast(`${name} scaled to ${scaleVal}`); setScaleOpen(false); await refetch() }
     catch (e: any) { setToast(`Error: ${e.message}`) }
     finally { setBusy(null); setTimeout(() => setToast(null), 3000) }
   }

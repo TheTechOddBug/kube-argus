@@ -2,8 +2,8 @@ apiVersion: v2
 name: kube-argus
 description: Real-time Kubernetes dashboard with live state, cost analysis, and AI-powered diagnostics
 type: application
-version: 1.2.5
-appVersion: "1.2.5"
+version: 1.2.6
+appVersion: "1.2.6"
 keywords:
   - kubernetes
   - dashboard
@@ -23,33 +23,33 @@ annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/changes: |
     - kind: added
-      description: "Slack notifications for JIT access requests with interactive Approve/Deny buttons"
+      description: "Generic webhook notifications for JIT events with per-event filtering and HMAC-SHA256 signing"
     - kind: added
-      description: "Dashboard Settings modal for configuring Slack integration (webhook URL and signing secret)"
+      description: "Audit trail consistency across pod replicas via read-merge-write ConfigMap and 10s sync"
     - kind: added
-      description: "Node allocated resources showing pod requests/limits with overcommit warnings"
+      description: "Real-time presence and audit deltas over WebSocket, replacing 5s polling"
     - kind: added
-      description: "Pod log viewer with search, configurable tail size, and error/warning line highlighting"
+      description: "Shareable URL state across views (ns, sub-tab, kind, type query params)"
     - kind: added
-      description: "Online users expanded to 24h window with Online/Away/Offline status groups"
-    - kind: added
-      description: "Audit trail Access Requests filter tab and immediate persistence"
+      description: "Admin View as Viewer impersonation toggle in user menu"
     - kind: changed
-      description: "Helm image tag defaults to Chart appVersion instead of latest"
+      description: "Cache rebuild now uses pointer slices for hot resources, eliminating per-rebuild value copies"
     - kind: changed
-      description: "Code splitting with React.lazy and manual chunk splitting for faster initial load"
+      description: "Prometheus query cache key step-aligned for stable hits within a step window"
     - kind: changed
-      description: "Prometheus query cache (30s TTL) and pre-computed lookup maps for O(1) pod resolution"
+      description: "Audit persistence debounced via dirty flag, eliminating per-record goroutine storm"
     - kind: changed
-      description: "SWR client-side cache eliminates loading flicker on view revisits"
+      description: "Optimistic feedback on workload restart, scale, CronJob trigger, and JIT approve buttons"
     - kind: fixed
-      description: "All API errors now return JSON instead of plain text, preventing frontend parse failures"
+      description: "WebSocket origin validated against dashboard host (closes CSRF-on-WS info-disclosure)"
     - kind: fixed
-      description: "Kubernetes NotFound errors return 404 instead of 500 for terminated nodes, pods, and workloads"
+      description: "Presence WebSocket writes serialised per-connection (gorilla Conn race fix)"
     - kind: fixed
-      description: "Audit trail no longer generates false session resume login events"
+      description: "AI diagnose stream aborts upstream LLM call when client disconnects"
     - kind: fixed
-      description: "Light theme chart colors and smooth theme transition animations"
+      description: "Light theme readability for form inputs, modal scrims, and toasts"
+    - kind: fixed
+      description: "ErrorBoundary auto-reloads once on stale chunk-hash errors after deploys"
   artifacthub.io/links: |
     - name: GitHub
       url: https://github.com/manishchaudhary101/kube-argus
