@@ -393,6 +393,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ---
 
+## Star History
+
+<a href="https://star-history.com/#manishchaudhary101/kube-argus&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=manishchaudhary101/kube-argus&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=manishchaudhary101/kube-argus&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=manishchaudhary101/kube-argus&type=Date" />
+  </picture>
+</a>
+
+---
+
 ## License
 
 This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
