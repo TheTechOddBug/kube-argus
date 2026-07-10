@@ -32,6 +32,7 @@ const PodResilienceView = lazy(() => import('./components/views/SpotInterruption
 const TopologySpreadView = lazy(() => import('./components/views/TopologySpreadView').then(m => ({ default: m.TopologySpreadView })))
 const HPAView = lazy(() => import('./components/views/HPAView').then(m => ({ default: m.HPAView })))
 const ConfigView = lazy(() => import('./components/views/ConfigView').then(m => ({ default: m.ConfigView })))
+const CRDsView = lazy(() => import('./components/views/CRDsView').then(m => ({ default: m.CRDsView })))
 const PVCsView = lazy(() => import('./components/views/PVCsView').then(m => ({ default: m.PVCsView })))
 const SpotAdvisorView = lazy(() => import('./components/views/SpotAdvisorView').then(m => ({ default: m.SpotAdvisorView })))
 const CronJobDetailView = lazy(() => import('./components/views/CronJobDetailView').then(m => ({ default: m.CronJobDetailView })))
@@ -398,7 +399,7 @@ function App() {
                 <button onClick={() => setShowSearch(true)} className="flex items-center gap-1.5 rounded-lg glass px-2.5 py-1 text-[11px] text-gray-400 transition-all hover:text-neon-cyan hover:shadow-[0_0_8px_rgba(6,214,224,0.1)]" aria-label="Search resources">
                   <span>⌕</span><span className="hidden sm:inline">Search</span>
                 </button>
-                {(tab === 'workloads' || tab === 'pods' || tab === 'ingress' || tab === 'services' || tab === 'events' || tab === 'hpa' || tab === 'config' || tab === 'pvcs') && namespaces && namespaces.length > 0 && (
+                {(tab === 'workloads' || tab === 'pods' || tab === 'ingress' || tab === 'services' || tab === 'events' || tab === 'hpa' || tab === 'config' || tab === 'pvcs' || tab === 'crds') && namespaces && namespaces.length > 0 && (
                   <NamespacePicker namespaces={namespaces} value={ns} onChange={setNs} />
                 )}
                 <div className="relative">
@@ -447,6 +448,7 @@ function App() {
           {tab === 'hpa' && <HPAView namespace={ns} onHPA={(hns: string, hname: string) => setHpaTarget({ ns: hns, name: hname })} />}
           {tab === 'pvcs' && <PVCsView namespace={ns} />}
           {tab === 'config' && <ConfigView namespace={ns} />}
+          {tab === 'crds' && <CRDsView namespace={ns} />}
           {tab === 'spot' && <SpotAdvisorView />}
           {tab === 'events' && <EventsView namespace={ns} />}
           {tab === 'troubled' && troubledSub === 'pods' && <TroubledPodsView onPod={(ns, name) => setPodTarget({ ns, name })} />}

@@ -2,18 +2,66 @@
 
 All notable changes to Kube-Argus will be documented in this file.
 
-## [v1.2.7] — 2026-05-10
+## [v1.2.8] — 2026-07-10
+
+### ⭐ New Features
+
+#### Custom Resources & Helm tab
+A new sidebar entry that surfaces every CustomResourceDefinition installed in the cluster (cert-manager, ArgoCD, Strimzi, External Secrets, KEDA, etc.) along with every Helm release deployed via the chart's `helm.sh/release.v1` Secret format.
+
+- **CRDs sub-tab** — search across kinds, API groups, plural names, and short names; grouped browse by API group; click a CRD to list instances (namespace-scoped or cluster-scoped); click any instance to view its full YAML read-only. Backed by the dynamic client — no compile-time knowledge of CRD types needed. Bookmarkable via `?crd=group/version/plural`.
+- **Helm Releases sub-tab** — every Helm release with status pill (`deployed`/`failed`/`superseded`/`uninstalled`), revision number, "updated X ago". Click a release for a tabbed detail modal (Overview / Manifest / Values / History) showing chart metadata, rendered manifest, merged values, and the full revision history (up to 64 revisions).
+- **Compare values between revisions** — side-by-side colored diff (rose for removed lines, emerald for added) selected from the History tab.
+- **Browser back works correctly** — sub-tab and selected CRD live in URL params (`?tab=helm`, `?crd=...`) with popstate handling.
+
+#### Helm rollback & uninstall (admin)
+The Custom Resources tab now supports destructive Helm actions for admins:
+
+- **Rollback to any revision** — Helm Go SDK handles pre/post hooks, resource ordering, and the new "rollback" revision marker. Confirm dialog before execution.
+- **Uninstall release** — Helm SDK deletes every resource in the latest manifest. Confirm dialog before execution. `keepHistory=true` query param available for preserving revision history.
+- Both actions audit-logged as `helm.rollback` and `helm.uninstall` with actor, role, resource, detail, and source IP.
 
 ### 🔒 Security
 
-- **Secret values are no longer readable by viewers via the YAML endpoint.** Previously, `/api/configs/?kind=secret` correctly masked values for non-admins, but `/api/yaml/Secret/{ns}/{name}` returned the raw resource with `.data` base64-encoded — a viewer could fetch it and decode the values. Non-admin requests now have every `.data` / `.stringData` value replaced with a `***REDACTED-NON-ADMIN***` placeholder. Keys, type, labels, annotations remain visible so the resource shape is still inspectable. Each redacted fetch is recorded in the audit trail as `secret.view`.
+- **Helm release detail endpoint redacts secrets for non-admins.** Previously, `/api/helm/releases/{ns}/{name}` and `/api/helm/releases/{ns}/{name}/revisions/{rev}` returned the full decoded release including `config` (user-supplied values), `chart.values`, the rendered `manifest` (with `Secret` resources base64-encoded), `chart.files`, `chart.templates`, and every subchart's values. For non-admin requesters we now:
+  - **Selectively redact** string values in `config`, `chart.values`, and every `chart.dependencies[].values` (subcharts) when the leaf key matches a sensitive substring (`password`, `passwd`, `secret`, `token`, `apiKey`, `accessKey`, `privateKey`, `signingKey`, `encryptionKey`, `credential`, `bearer`, `dsn`). When a leaf is a value-holder (`value`, `raw`, `data`, `content`, `plaintext`, etc.) *under* a sensitive-key ancestor, it's also redacted — so the common `password: { value: "..." }` structured form is covered. Resource references (keys ending in `Name`, `Names`, `Ref`, `Refs`, `Reference`, `References`) are **never** redacted — `imagePullSecretName`, `tlsSecretRef`, `tokenName` are passed through. Numbers, booleans, and nulls are never redacted (a viewer learning `replicas: 3` or `serviceType: ClusterIP` is not a leak).
+  - **Mask Secret resources in the manifest** — parse the multi-doc YAML, find any doc with `kind: Secret`, replace every `.data` / `.stringData` value with `REDACTED-NON-ADMIN`. Non-Secret docs pass through unchanged.
+  - **Drop `chart.files` and `chart.templates`** — files can ship credentials bundled with the chart; templates are raw source that can contain string literals for a viewer to reason backwards from.
+  - Each redacted fetch records an audit entry as `helm.release.view` with detail noting which fields were redacted, so admins can see who looked at what.
+
+- **Secret values are no longer readable by non-admins via the YAML endpoint.** Previously, `/api/yaml/Secret/{ns}/{name}` returned the raw resource with `.data` base64-encoded — a viewer could fetch it and decode the values. Non-admin requests now have every `.data` / `.stringData` value replaced with a `***REDACTED-NON-ADMIN***` placeholder. Each redacted fetch is recorded as `secret.view`.
+
+- **`apiConfigData` admin check fixed when auth is disabled.** The Secret-reveal endpoint at `/api/configs/{ns}/{name}?kind=secret` was unconditionally treating no-auth requesters as admin — ignoring `DEFAULT_ROLE`. As a result, even when `/api/me` correctly reported the user as viewer (the default), clicking **Reveal** on the Config page returned cleartext secret values. Now uses the same `isAdmin` helper as the rest of the codebase.
+
+### 🛠 Engineering
+
+- **Backend reorganization** — moved every handler/cache/auth/audit/jit/notify file out of the flat `cmd/server/` package into per-domain packages under `internal/{api,auth,audit,jit,notify,httpx}/`. `cmd/server/main.go` is now **238 lines of pure wire-up** (env parsing → client init → DI of cross-package callbacks → mux → ListenAndServe). Behavior unchanged across all endpoints. See `docs/REORGANIZATION.md` for the executed plan.
+
+- **Initial test suite** — 36 unit tests across 6 packages covering security-critical helpers and pure utilities:
+  - `TestIsAdmin_*` (5) — role gating across auth-enabled/disabled and viewer/admin
+  - `TestAuditDedup_*` (3) and `TestAuditTrimExpired_*` (3, including zero-retention guard) — replica consistency, boundary retention
+  - `TestJit*` and `TestHasActiveJIT_*` (6) — approval lifecycle, workload scoping, expiration
+  - `TestConfigAcceptsEvent_*` (2) and `TestWebhookSign_*` (2) — webhook fan-out filtering and HMAC
+  - `TestRedactValues_*`, `TestIsSensitiveLeafKey`, `TestRedactManifestSecrets_*`, `TestRedactReleaseForViewer_*` (7 including subchart + value-holder + template cases) — Helm value redaction heuristics
+  - `TestServedVersion` (5 sub-cases) — CRD storage/served version resolution
+  - `TestJSON_*`, `TestError_*`, `TestK8sError_*` (5) — httpx response helpers including NotFound→404 translation
+  - `TestSplitReleasePath` — Helm dispatcher path parser
+  - All pass via `go test ./...`
+
+- **TanStack Query data layer** — `@tanstack/react-query` installed, `QueryClientProvider` wired in `main.tsx`, and a `useApi()` drop-in wrapper for `useFetch` in `web/src/hooks/useApi.ts`. Migration path: rename the import in any view, behavior is identical. Once every view is migrated, the manual SWR cache in `useFetch.tsx` can be deleted.
+
+- **CLAUDE.md** — project brief at the repo root with the post-reorg architecture map, coding conventions, security paths already handled, version bump policy, release process, and the "run tests after every backend change" rule. Read this first before making changes in future sessions.
 
 ### 🐛 Fixes
 
-- **Helm README screenshots** now render on ArtifactHub. Replaced the raw HTML `<table>` block with plain markdown image syntax, which ArtifactHub's renderer doesn't strip. The annotation-driven sidebar gallery was already working; this makes the screenshots also appear inline in the README.
+- **CRD YAML modal now opens correctly** — earlier the modal block was trapped inside an early-return branch and never rendered when on the CRD instance list. The modal is now at the top-level of the view.
+- **CRD browser browser-back** — clicking back from a CRD's instance list now returns to the CRD index, not the dashboard's Overview tab. Selected CRD is in the URL so popstate restores the right view.
+- **Helm README screenshots** now render on ArtifactHub. Replaced the raw HTML `<table>` block with plain markdown image syntax, which ArtifactHub's renderer doesn't strip.
 
 ### 🛠 Dependencies
 
+- Added `helm.sh/helm/v3` for rollback/uninstall via the official Helm SDK.
+- Added `@tanstack/react-query` for the data-layer migration.
 - Bumped `github.com/moby/spdystream` to `v0.5.1` (advisory).
 - Bumped `postcss` floor to `^8.5.10` (advisory); resolves to `8.5.14`.
 

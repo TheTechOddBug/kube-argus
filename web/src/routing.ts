@@ -8,6 +8,7 @@ export const TABS = [
   { id: 'hpa', label: 'HPA', icon: '⟳' },
   { id: 'pvcs', label: 'PV & PVCs', icon: '▤' },
   { id: 'config', label: 'Config & Secrets', icon: '⬔' },
+  { id: 'crds', label: 'Custom Resources & Helm', icon: '◇' },
   { id: 'spot', label: 'Spot Advisor', icon: '◎' },
   { id: 'events', label: 'Events', icon: '◷' },
   { id: 'troubled', label: 'Troubled', icon: '⚠' },

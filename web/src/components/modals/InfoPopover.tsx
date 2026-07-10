@@ -10,6 +10,7 @@ export const TABS = [
   { id: 'hpa', label: 'HPA', icon: '⟳' },
   { id: 'pvcs', label: 'PV & PVCs', icon: '▤' },
   { id: 'config', label: 'Config & Secrets', icon: '⬔' },
+  { id: 'crds', label: 'Custom Resources & Helm', icon: '◇' },
   { id: 'spot', label: 'Spot Advisor', icon: '◎' },
   { id: 'events', label: 'Events', icon: '◷' },
   { id: 'troubled', label: 'Troubled', icon: '⚠' },
@@ -63,6 +64,11 @@ export const TAB_DETAIL: Record<string, { desc: string; actions: string[]; tips:
     desc: 'ConfigMaps and Secrets with data key counts and last-modified timestamps.',
     actions: ['Toggle between ConfigMaps and Secrets', 'See when each resource was last modified', 'View data keys and values (Secrets are masked)'],
     tips: ['All items show a subtle "modified X ago" timestamp', 'Filter by namespace to narrow down results'],
+  },
+  crds: {
+    desc: 'Two views in one tab. CRDs: every CustomResourceDefinition installed (cert-manager, ArgoCD, Strimzi, External Secrets, KEDA, etc.) with their instances. Helm Releases: every Helm-deployed app, by namespace, with revision and status.',
+    actions: ['CRDs tab — search across kinds, groups, plural and short names', 'CRDs tab — click a CRD to list its instances and view YAML (read-only)', 'Helm tab — see every release with status (deployed / failed / superseded) and revision', 'Helm tab — click a release to see the decoded chart, manifest, values, and status', 'Both tabs filter by the namespace picker for namespaced resources', 'Bookmark a specific CRD via the ?crd= query param; the ?tab= param remembers CRDs vs Helm'],
+    tips: ['NS badge = namespaced CRD, CLUSTER badge = cluster-scoped', 'Helm release data lives in Secrets with type helm.sh/release.v1 — only the latest revision per release is shown', 'Short names (e.g. cm, sec) are searchable just like full CRD kinds'],
   },
   spot: {
     desc: 'Spot instance advisor with intelligent consolidation suggestions and cost allocation.',

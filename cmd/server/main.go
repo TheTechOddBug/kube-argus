@@ -17,14 +17,15 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
+
+	"kube-argus/internal/api"
+	"kube-argus/internal/audit"
+	"kube-argus/internal/auth"
+	"kube-argus/internal/jit"
+	"kube-argus/internal/notify"
 )
 
-var (
-	clientset   *kubernetes.Clientset
-	metricsCl   *metricsv.Clientset
-	restCfg     *rest.Config
-	clusterName string
-)
+var clusterName string
 
 // parseLogLevel maps a case-insensitive level string to a slog.Level.
 // Returns (level, true) for recognized values; (slog.LevelInfo, false) otherwise.
@@ -78,123 +79,93 @@ func main() {
 	fmt.Fprint(os.Stdout, "  Created by "+cyan+"Manish Chaudhary"+reset+" ("+uline+"https://github.com/manishchaudhary101"+reset+")\n")
 	fmt.Fprintln(os.Stdout)
 
-	loadSecretsFromAWS()
+	auth.LoadSecretsFromAWS()
 
 	cfg, err := kubeConfig()
 	if err != nil {
 		slog.Error("kubeconfig failed", "error", err)
 		os.Exit(1)
 	}
-	restCfg = cfg
-	clientset, err = kubernetes.NewForConfig(cfg)
+	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		slog.Error("clientset init failed", "error", err)
 		os.Exit(1)
 	}
-	metricsCl, err = metricsv.NewForConfig(cfg)
+	metricsCl, err := metricsv.NewForConfig(cfg)
 	if err != nil {
 		slog.Warn("metrics-server client init failed", "error", err)
+		metricsCl = nil
 	} else {
 		slog.Info("metrics-server client initialized")
 	}
 
+	api.Init(clientset, metricsCl, cfg, clusterName)
+
 	slog.Info("warming cache...")
 	prevGC := debug.SetGCPercent(400)
-	startCacheLoop()
+	api.StartCache()
 	debug.SetGCPercent(prevGC)
 	runtime.GC()
-	cache.mu.RLock()
-	nm, pm := cache.nodeMetrics != nil, cache.podMetrics != nil
-	cache.mu.RUnlock()
+	nm, pm := api.CacheReady()
 	if nm && pm {
 		slog.Info("cache ready", "metrics_server", "node + pod metrics available")
 	} else if nm || pm {
 		slog.Info("cache ready", "metrics_server", "partial", "node", nm, "pod", pm)
-	} else if metricsCl != nil {
+	} else if api.MetricsClientPresent() {
 		slog.Warn("cache ready", "metrics_server", "no data returned — check APIService and RBAC")
 	} else {
 		slog.Info("cache ready", "metrics_server", "disabled")
 	}
 
-	startSpotAdvisorLoop()
-	initLLM()
-	initPrometheus()
+	api.StartSpotAdvisor()
+	api.InitLLM()
+	api.InitPrometheus()
 
-	initAuth()
-	jitInitPersistence()
-	jitRestore()
-	if len(jitStore.requests) > 0 {
-		slog.Info("jit: restored requests", "count", len(jitStore.requests))
+	auth.Init()
+
+	jit.SetClientset(clientset)
+	jit.ResolvePodOwner = api.ResolvePodOwner
+	jit.InitPersistence()
+	jit.Restore()
+	if n := jit.HasRequests(); n > 0 {
+		slog.Info("jit: restored requests", "count", n)
 	}
-	go jitExpiryLoop()
+	jit.StartExpiryLoop()
 
-	initSlack()
-	initWebhook()
+	// Wire cross-package callbacks before any package that fires events runs.
+	auth.AuditRecord = audit.Record
+	auth.TrackUser = audit.TrackUser
+	auth.HasActiveJIT = jit.HasActive
 
-	auditInitPersistence()
-	auditRestore()
+	notify.Init(clientset, jit.Namespace())
+	notify.Cluster = func() string { return clusterName }
+	notify.ClientIP = auth.ClientIP
+	notify.RequireAdmin = auth.RequireAdmin
+	notify.AuditRecord = audit.Record
+	notify.CurrentUser = func(r *http.Request) (string, string, bool) {
+		sd, ok := r.Context().Value(auth.UserCtxKey).(*auth.SessionData)
+		if !ok || sd == nil {
+			return "", "", false
+		}
+		return sd.Email, sd.Role, true
+	}
+	notify.JITApprove = jit.Approve
+	notify.JITDeny = jit.Deny
+	notify.JITLookup = jit.Lookup
+	notify.InitSlack()
+	notify.InitWebhook()
+	api.InitCRDClients()
+
+	audit.InitPersistence(clientset, jit.Namespace())
+	audit.Restore()
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/auth/login", authLogin)
-	mux.HandleFunc("/auth/callback", authCallback)
-	mux.HandleFunc("/auth/logout", authLogout)
-
-	mux.HandleFunc("/api/me", apiMe)
-	mux.HandleFunc("/api/overview", apiOverview)
-	mux.HandleFunc("/api/nodes", apiNodes)
-	mux.HandleFunc("/api/nodes/", apiNodeAction)
-	mux.HandleFunc("/api/workloads", apiWorkloads)
-	mux.HandleFunc("/api/workloads/", apiWorkloadAction)
-	mux.HandleFunc("/api/search", apiSearch)
-	mux.HandleFunc("/api/pods", apiPods)
-	mux.HandleFunc("/api/pod-sparklines", apiPodSparklines)
-	mux.HandleFunc("/api/pods/", apiPodDetail)
-	mux.HandleFunc("/api/ingresses", apiIngresses)
-	mux.HandleFunc("/api/ingresses/", apiIngressDescribe)
-	mux.HandleFunc("/api/services", apiServices)
-	mux.HandleFunc("/api/services/", apiServiceDetail)
-	mux.HandleFunc("/api/events", apiEvents)
-	mux.HandleFunc("/api/hpa", apiHPA)
-	mux.HandleFunc("/api/hpa/", apiHPADetail)
-	mux.HandleFunc("/api/configs", apiConfigs)
-	mux.HandleFunc("/api/configs/", apiConfigData)
-	mux.HandleFunc("/api/exec", apiExec)
-	mux.HandleFunc("/api/spot-advisor", apiSpotAdvisor)
-	mux.HandleFunc("/api/spot-interruptions", apiSpotInterruptions)
-	mux.HandleFunc("/api/topology-spread", apiTopologySpread)
-	mux.HandleFunc("/api/metrics/node", apiMetricsNode)
-	mux.HandleFunc("/api/metrics/pod", apiMetricsPod)
-	mux.HandleFunc("/api/metrics/workload", apiMetricsWorkload)
-	mux.HandleFunc("/api/restart-timeline", apiRestartTimeline)
-	mux.HandleFunc("/api/pdbs", apiPDBs)
-	mux.HandleFunc("/api/cronjobs/", apiCronJobHistory)
-	mux.HandleFunc("/api/namespace-costs", apiNamespaceCosts)
-	mux.HandleFunc("/api/workload-sizing", apiWorkloadSizing)
-	mux.HandleFunc("/api/alerts", apiAlerts)
-	mux.HandleFunc("/api/ai/diagnose", apiAIDiagnose)
-	mux.HandleFunc("/api/ai/spot-analysis", apiAISpotAnalysis)
-	mux.HandleFunc("/api/namespaces", apiNamespaces)
-	mux.HandleFunc("/api/cluster-info", func(w http.ResponseWriter, r *http.Request) {
-		j(w, map[string]string{"name": clusterName})
-	})
-	mux.HandleFunc("/api/storage", apiStorage)
-	mux.HandleFunc("/api/config-drift", apiConfigDrift)
-	mux.HandleFunc("/api/yaml/", apiYaml)
-	mux.HandleFunc("/api/jit/requests", apiJITRequests)
-	mux.HandleFunc("/api/jit/my-grants", apiJITMyGrants)
-	mux.HandleFunc("/api/jit/", apiJITAction)
-	mux.HandleFunc("/api/slack/interact", apiSlackInteract)
-	mux.HandleFunc("/api/settings/slack", apiSlackSettings)
-	mux.HandleFunc("/api/settings/webhook", apiWebhookSettings)
-	mux.HandleFunc("/api/audit", apiAudit)
-	mux.HandleFunc("/api/ws/presence", apiPresenceWS)
-	mux.HandleFunc("/api/online-users", func(w http.ResponseWriter, r *http.Request) {
-		if !requireAdmin(w, r) {
-			return
-		}
-		j(w, getOnlineUsers())
-	})
+	mux.HandleFunc("/auth/login", auth.LoginHandler)
+	mux.HandleFunc("/auth/callback", auth.CallbackHandler)
+	mux.HandleFunc("/auth/logout", auth.LogoutHandler)
+	mux.HandleFunc("/api/me", auth.MeHandler)
+	api.RegisterRoutes(mux)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
@@ -231,7 +202,7 @@ func main() {
 		addr = ":" + p
 	}
 	slog.Info("kube-argus listening", "addr", addr)
-	if err := http.ListenAndServe(addr, gzipWrap(authMiddleware(corsWrap(mux)))); err != nil {
+	if err := http.ListenAndServe(addr, api.GzipWrap(auth.Middleware(api.CORSWrap(mux)))); err != nil {
 		slog.Error("server exited", "error", err)
 		os.Exit(1)
 	}

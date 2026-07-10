@@ -2,8 +2,8 @@ apiVersion: v2
 name: kube-argus
 description: Real-time Kubernetes dashboard with live state, cost analysis, and AI-powered diagnostics
 type: application
-version: 1.2.7
-appVersion: "1.2.7"
+version: 1.2.8
+appVersion: "1.2.8"
 keywords:
   - kubernetes
   - dashboard
@@ -22,8 +22,22 @@ maintainers:
 annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/changes: |
+    - kind: added
+      description: "Custom Resources & Helm tab — browse every CRD installed in the cluster (cert-manager, ArgoCD, Strimzi, External Secrets, KEDA, etc.) plus every Helm release with rollback / uninstall (admin) and value-diff between revisions"
+    - kind: added
+      description: "Helm release rollback and uninstall via the official Helm Go SDK (handles hooks, ordering, finalizers correctly). Admin-only, audit-logged as helm.rollback / helm.uninstall."
+    - kind: added
+      description: "Initial test suite — 36 unit tests across 6 packages covering isAdmin role gating, secret redaction (including subchart/value-holder cases), audit dedup/retention, webhook HMAC, JIT scoping, CRD version resolution, and httpx response helpers"
+    - kind: added
+      description: "TanStack Query data layer — QueryClientProvider in main.tsx and useApi() drop-in wrapper for incremental migration off useFetch"
     - kind: security
-      description: "Viewers can no longer read Secret values via /api/yaml/Secret. Data and stringData fields are now redacted for non-admins; keys and metadata remain visible. Each viewer YAML fetch is audit-logged as secret.view."
+      description: "Helm release detail endpoint redacts secrets for non-admins — config, chart.values, and every subchart's values redacted on sensitive-named keys (password, token, apiKey, secret, etc.) and on value-holder wrappers under sensitive ancestors. Manifest Secret resources have .data and .stringData masked; chart.files and chart.templates dropped. Viewer fetches audit-logged as helm.release.view."
+    - kind: security
+      description: "Viewers can no longer read Secret values via /api/yaml/Secret — .data and .stringData redacted for non-admins; keys and metadata remain visible. Viewer fetches audit-logged as secret.view."
+    - kind: security
+      description: "Config page Reveal button no longer exposes Secret values to viewers when auth is disabled — apiConfigData was treating no-auth requesters as admin instead of honoring DEFAULT_ROLE. Now uses the shared isAdmin helper."
+    - kind: changed
+      description: "Backend reorganized into internal/{api,auth,audit,jit,notify,httpx} packages — cmd/server/main.go is now 238 lines of pure wire-up. Behavior unchanged."
     - kind: fixed
       description: "Helm README screenshots now render on ArtifactHub (replaced raw HTML table with plain markdown)"
     - kind: changed
@@ -31,12 +45,3 @@ annotations:
   artifacthub.io/links: |
     - name: GitHub
       url: https://github.com/manishchaudhary101/kube-argus
-  artifacthub.io/screenshots: |
-    - title: Cluster Overview — Real-time node and pod status
-      url: https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-overview.png
-    - title: Node Detail — Pod heatmap, conditions, and drain wizard
-      url: https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-node-detail.png
-    - title: Pod Metrics — Prometheus CPU and memory charts
-      url: https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-pod-metrics.png
-    - title: Spot Advisor — Cost optimization and instance recommendations
-      url: https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-spot-advisor.png

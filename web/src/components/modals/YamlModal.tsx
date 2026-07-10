@@ -26,9 +26,10 @@ export function highlightYaml(text: string): string {
     .replace(/#.*/g, '<span class="text-gray-600">$&</span>')
 }
 
-export function YamlModal({ kind, ns, name, onClose }: { kind: string; ns: string; name: string; onClose: () => void }) {
+export function YamlModal({ kind, ns, name, fetchUrl, readOnly, onClose }: { kind: string; ns: string; name: string; fetchUrl?: string; readOnly?: boolean; onClose: () => void }) {
   const { role } = useAuth()
-  const isAdmin = role === 'admin'
+  const isAdmin = role === 'admin' && !readOnly
+  const getUrl = fetchUrl || `/api/yaml/${kind}/${ns}/${name}`
   const [content, setContent] = useState('')
   const [editMode, setEditMode] = useState(false)
   const [editContent, setEditContent] = useState('')
@@ -40,7 +41,7 @@ export function YamlModal({ kind, ns, name, onClose }: { kind: string; ns: strin
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetch(`/api/yaml/${kind}/${ns}/${name}`)
+    fetch(getUrl)
       .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json() })
       .then(d => {
         const cleaned = { ...d }
@@ -56,9 +57,14 @@ export function YamlModal({ kind, ns, name, onClose }: { kind: string; ns: strin
         setLoading(false)
       })
       .catch(e => { setError(e.message); setLoading(false) })
-  }, [kind, ns, name])
+  }, [kind, ns, name, getUrl])
 
   const handleApply = async () => {
+    // Defensive: PUT always uses the canonical editor URL. If a caller passed
+    // a custom fetchUrl (e.g. CRDs, Helm), they must also pass readOnly so
+    // isAdmin is forced false and this code path never runs. Guard belt-and-
+    // braces in case a future caller forgets.
+    if (readOnly || fetchUrl) return
     setSaving(true)
     setError(null)
     try {

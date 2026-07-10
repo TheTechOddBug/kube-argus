@@ -1,28 +1,8 @@
 # Kube-Argus Helm Chart
 
-![Kube-Argus](https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/logo.svg)
-
 The Kubernetes dashboard you'd build if you were tired of switching between k9s, Grafana, and kubectl.
 
 Live cluster state, streaming pod logs, interactive shell, YAML editor, drain wizard, cost analysis, and AI-powered diagnostics — in a single binary with zero dependencies.
-
-## Screenshots
-
-**Cluster Overview** — Live node status, CPU/memory utilisation, top namespaces, and resource counts refreshed every 10 seconds.
-
-![Cluster Overview](https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-overview.png)
-
-**Node Detail & Metrics** — kubectl-describe-style detail with Prometheus metrics, events, pod list, and admin actions (cordon, drain).
-
-![Node Detail and Metrics](https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-node-detail.png)
-
-**Pod Metrics & Logs** — Per-pod CPU/memory graphs, live log streaming, container selector, and AI-powered diagnosis.
-
-![Pod Metrics and Logs](https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-pod-metrics.png)
-
-**Spot Advisor & Cost Analysis** — Spot instance risk scoring, cluster cost breakdown, and intelligent consolidation recommendations.
-
-![Spot Advisor and Cost Analysis](https://raw.githubusercontent.com/manishchaudhary101/kube-argus/master/docs/screenshot-spot-advisor.png)
 
 ## Quick Install
 
