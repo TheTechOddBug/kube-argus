@@ -23,8 +23,26 @@
 </p>
 
 <p align="center">
-  Live cluster state, streaming pod logs, just-in-time exec access, interactive shell, YAML editor, drain wizard, cost analysis, and AI-powered diagnostics — in a <strong>single binary</strong> with <strong>zero dependencies</strong>.
+  The <strong>real-time Kubernetes dashboard</strong> for SREs. Live cluster state, streaming logs, JIT exec approvals, drain wizard, spot cost analysis, and AI-powered diagnostics — in a <strong>single ~20 MB Go binary</strong> with <strong>zero external dependencies</strong>.
 </p>
+
+<p align="center">
+  <em>Everything <code>kubectl</code> gives you, in a UI you can hand a junior SRE.</em>
+</p>
+
+---
+
+## 🚀 Try it in 30 seconds
+
+```bash
+helm repo add kube-argus https://manishchaudhary101.github.io/kube-argus
+helm install kube-argus kube-argus/kube-argus \
+  --namespace kube-argus --create-namespace
+kubectl -n kube-argus port-forward svc/kube-argus 8080:80
+# → open http://localhost:8080
+```
+
+No database, no CRDs, no agents on your nodes. Uninstall is one `helm uninstall`. See [Getting Started](#getting-started) for Docker Compose, plain manifests, and local dev.
 
 ---
 
@@ -61,21 +79,16 @@
 
 Most Kubernetes dashboards show you resources. Kube-Argus gives you a **live, real-time operating picture** of your cluster — what's happening now, what it costs, and how to fix it — with the same immediacy as k9s, but in a web UI you can share with your team.
 
-### Key Features
+### The differentiators
 
-- 💡 **Single binary (~20 MB)** — one Go binary serves the API and React frontend; ~30 MB Docker image
-- ⚡ **10-second auto-refresh** — every view updates automatically, no manual reload
-- 🔒 **Zero dependencies** — no database, no CRDs, no operators, no agents on worker nodes
-- 📊 **Prometheus metrics** — node, pod, and workload metrics with selectable time ranges
-- 🤖 **AI-powered diagnosis** — LLM-powered pod troubleshooting with streaming responses
-- 💰 **Cost analysis** — spot instance risk scoring, namespace cost allocation, consolidation recommendations
-- 🖥️ **Interactive web shell** — exec into any pod over WebSocket with full terminal
-- 📋 **YAML editor** — view and edit raw YAML for 11 resource kinds
-- 🔐 **JIT exec access** — zero-trust shell access with approval workflow, auto-expiry, and custom durations up to 7 days
-- ⭐ **Namespace favorites** — star frequently-used namespaces, persisted per-user
-- ⏱️ **CronJob manual trigger** — run CronJobs on demand with JIT approval for viewers
-- 📈 **Pod restart timeline** — color-coded scatter chart of restart events with reasons
-- 📝 **Audit trail** — track logins, pod deletions, scaling actions, exec sessions
+- 🔐 **JIT exec access** — zero-trust shell into any pod with an approval workflow, auto-expiry, and Slack notifications. Viewers get temporary elevated access without becoming admins.
+- 💰 **Spot Advisor & cost analysis** — spot-interruption risk scoring, namespace cost allocation, and concrete consolidation recommendations (EKS today; other clouds via Prometheus).
+- 🤖 **AI-powered pod diagnosis** — bring your own OpenAI-compatible endpoint; get root-cause explanations for CrashLoopBackOff / OOMKilled / ImagePullBackOff pods with streaming responses.
+- 📊 **Prometheus-driven right-sizing** — 7-day resource recommendations per workload, so you can cut overprovisioning without guesswork.
+- 🖥️ **Full-fidelity operator toolkit** — interactive web shell, YAML editor for 11 kinds, drain wizard with PDB preview, CronJob manual triggers, pod restart timeline, audit trail.
+- 💡 **Single ~20 MB binary, zero external deps** — no database, no CRDs, no operators, no agents. `helm install` and it's running in seconds.
+
+See the [full feature comparison](#feature-comparison) and [feature list](#features).
 
 ### Works On
 
